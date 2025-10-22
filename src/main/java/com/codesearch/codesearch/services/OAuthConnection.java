@@ -49,7 +49,7 @@ public class OAuthConnection {
         if (client == null) {
             return null;
         }
-
+        // TODO: hash each token in the db
         return client.getAccessToken().getTokenValue();
     }
 
