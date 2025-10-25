@@ -14,6 +14,8 @@ public class User {
     private String email;
     private String token;
 
+
+
     public UUID getId() {
         return id;
     }
