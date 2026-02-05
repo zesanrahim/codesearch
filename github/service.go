@@ -1,6 +1,7 @@
 package main
 
 import (
+	"codesearch/database"
 	"fmt"
 	"os"
 	"os/exec"
@@ -16,6 +17,45 @@ type Repo struct {
 	// Size        int64
 }
 
+var (
+	repoCache = make(map[string]*Repo)
+	cacheLock sync.RWMutex
+)
+
+func getRepo(name string) (*Repo, error) {
+
+	cacheLock.RLock()
+
+	if repo, exists := repoCache[name]; exists {
+		cacheLock.RUnlock()
+		return repo, nil
+	}
+
+	database.GetClient()
+
+	var repoPath, cloneURL string
+
+	// TODO: Add Schema's and get data accorrdingly
+	// sql query once db has schema
+	// err := client.DB("query")
+
+	// if err != nill {
+	// 	return nil
+	// }
+
+	repo := &Repo{
+		Name:     name,
+		RepoPath: repoPath,
+		CloneURL: cloneURL,
+	}
+
+	cacheLock.Lock()
+	repoCache[name] = repo
+	cacheLock.Unlock()
+
+	return repo, nil
+}
+
 func cloneRepo(repo *Repo) error {
 
 	repo.Lock.Lock()
@@ -23,7 +63,7 @@ func cloneRepo(repo *Repo) error {
 
 	if _, err := os.Stat(repo.RepoPath); !os.IsNotExist(err) {
 		fmt.Printf("Repo %s already exists at %s\n", repo.Name, repo.RepoPath)
-		return nil // already cloned
+		return nil
 	}
 
 	if err := os.MkdirAll(repo.RepoPath, os.ModePerm); err != nil {
@@ -40,7 +80,6 @@ func cloneRepo(repo *Repo) error {
 	return nil
 
 }
-
 func fetchRepo(repo *Repo) error  { return nil }
 func checkRepo(repo *Repo) error  { return nil }
 func deleteRepo(repo *Repo) error { return nil }
