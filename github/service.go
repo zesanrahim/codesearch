@@ -12,7 +12,6 @@ type Repo struct {
 	Name     string
 	RepoPath string
 	CloneURL string
-	Lock     sync.RWMutex
 	// LastFetched time.Time
 	// Size        int64
 }
@@ -22,15 +21,14 @@ var (
 	cacheLock sync.RWMutex
 )
 
-func getRepo(name string) (*Repo, error) {
+func getRepo(name string) (repo *Repo, err error) {
 
 	cacheLock.RLock()
-
 	if repo, exists := repoCache[name]; exists {
 		cacheLock.RUnlock()
 		return repo, nil
 	}
-
+	cacheLock.RUnlock()
 	database.GetClient()
 
 	var repoPath, cloneURL string
@@ -43,7 +41,7 @@ func getRepo(name string) (*Repo, error) {
 	// 	return nil
 	// }
 
-	repo := &Repo{
+	repo = &Repo{
 		Name:     name,
 		RepoPath: repoPath,
 		CloneURL: cloneURL,
@@ -58,9 +56,6 @@ func getRepo(name string) (*Repo, error) {
 
 func cloneRepo(repo *Repo) error {
 
-	repo.Lock.Lock()
-	defer repo.Lock.Unlock()
-
 	if _, err := os.Stat(repo.RepoPath); !os.IsNotExist(err) {
 		fmt.Printf("Repo %s already exists at %s\n", repo.Name, repo.RepoPath)
 		return nil
@@ -70,7 +65,7 @@ func cloneRepo(repo *Repo) error {
 		return fmt.Errorf("failed to create repo directory: %w", err)
 	}
 
-	cmd := exec.Command("git", "clone", "--bare", repo.Name, repo.RepoPath)
+	cmd := exec.Command("git", "clone", "--bare", repo.CloneURL, repo.RepoPath)
 	output, err := cmd.Output()
 	if err != nil {
 		return fmt.Errorf("git clone failed: %w\nOutput: %s", err, string(output))
@@ -80,6 +75,40 @@ func cloneRepo(repo *Repo) error {
 	return nil
 
 }
-func fetchRepo(repo *Repo) error  { return nil }
-func checkRepo(repo *Repo) error  { return nil }
-func deleteRepo(repo *Repo) error { return nil }
+
+func fetchRepo(repo *Repo) error {
+
+	if _, err := os.Stat(repo.RepoPath); os.IsNotExist(err) {
+		fmt.Printf("Repo %s does not exists at %s\n", repo.Name, repo.RepoPath)
+		return nil
+	}
+	cmd := exec.Command("git", "-C", repo.RepoPath, "fetch", "--prune")
+	output, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("git fetch failed: %w\nOutput: %s", err, string(output))
+	}
+
+	return nil
+}
+func checkRepo(repo *Repo) error {
+	// TODO : add git fsck command if needed
+	return nil
+}
+func deleteRepo(repo *Repo) error {
+
+	if _, err := os.Stat(repo.RepoPath); os.IsNotExist(err) {
+		return fmt.Errorf("Repo %s does not exists", repo.RepoPath)
+
+	}
+
+	if err := os.RemoveAll(repo.RepoPath); err != nil {
+		return fmt.Errorf("failed to delete repo directory: %w", err)
+	}
+	cacheLock.Lock()
+	delete(repoCache, repo.Name)
+	cacheLock.Unlock()
+
+	fmt.Printf("Repo has been deleted")
+
+	return nil
+}
