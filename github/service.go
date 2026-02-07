@@ -90,10 +90,11 @@ func fetchRepo(repo *Repo) error {
 
 	return nil
 }
-func checkRepo(repo *Repo) error {
-	// TODO : add git fsck command if needed
-	return nil
-}
+
+//	func checkRepo(repo *Repo) error {
+//		// TODO : add git fsck command if needed
+//		return nil
+//	}
 func deleteRepo(repo *Repo) error {
 
 	if _, err := os.Stat(repo.RepoPath); os.IsNotExist(err) {
