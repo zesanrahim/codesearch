@@ -15,7 +15,7 @@ var (
 type Index struct {
     data        []byte
     Mmap        mmap.MMap
-    LineOffsets []int
+    LineOffsets []int   
     Trigrams    map[string][]int
 }
 
