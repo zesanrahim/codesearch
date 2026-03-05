@@ -1,11 +1,18 @@
-package main
+package github
 
 import (
 	"codesearch/database"
+	"codesearch/engine"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"sync"
+)
+
+var (
+	ignoredPatterns []string
 )
 
 type Repo struct {
@@ -21,7 +28,7 @@ var (
 	cacheLock sync.RWMutex
 )
 
-func getRepo(name string) (repo *Repo, err error) {
+func GetRepo(name string) (repo *Repo, err error) {
 
 	cacheLock.RLock()
 	if repo, exists := repoCache[name]; exists {
@@ -54,7 +61,7 @@ func getRepo(name string) (repo *Repo, err error) {
 	return repo, nil
 }
 
-func cloneRepo(repo *Repo) error {
+func CloneRepo(repo *Repo) error {
 
 	if _, err := os.Stat(repo.RepoPath); !os.IsNotExist(err) {
 		fmt.Printf("Repo %s already exists at %s\n", repo.Name, repo.RepoPath)
@@ -65,7 +72,7 @@ func cloneRepo(repo *Repo) error {
 		return fmt.Errorf("failed to create repo directory: %w", err)
 	}
 
-	cmd := exec.Command("git", "clone", "--bare", repo.CloneURL, repo.RepoPath)
+	cmd := exec.Command("git", "clone", repo.CloneURL, repo.RepoPath)
 	output, err := cmd.Output()
 	if err != nil {
 		return fmt.Errorf("git clone failed: %w\nOutput: %s", err, string(output))
@@ -76,7 +83,7 @@ func cloneRepo(repo *Repo) error {
 
 }
 
-func fetchRepo(repo *Repo) error {
+func FetchRepo(repo *Repo) error {
 
 	if _, err := os.Stat(repo.RepoPath); os.IsNotExist(err) {
 		fmt.Printf("Repo %s does not exists at %s\n", repo.Name, repo.RepoPath)
@@ -95,7 +102,7 @@ func fetchRepo(repo *Repo) error {
 //		// TODO : add git fsck command if needed
 //		return nil
 //	}
-func deleteRepo(repo *Repo) error {
+func DeleteRepo(repo *Repo) error {
 
 	if _, err := os.Stat(repo.RepoPath); os.IsNotExist(err) {
 		return fmt.Errorf("Repo %s does not exists", repo.RepoPath)
@@ -112,4 +119,94 @@ func deleteRepo(repo *Repo) error {
 	fmt.Printf("Repo has been deleted")
 
 	return nil
+}
+
+func IndexRepo(repo *Repo) (*engine.Index, error) {
+	idx := &engine.Index{}
+	allContent := ""
+
+	err := filepath.Walk(repo.RepoPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+
+		if info.IsDir() || shouldIgnore(path) {
+			return nil
+		}
+
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+
+		allContent += string(content) + "\n"
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	tempFile := fmt.Sprintf("/tmp/index_%s.txt", repo.Name)
+	os.WriteFile(tempFile, []byte(allContent), 0o644)
+
+	idx.MapBoundaries(tempFile)
+	idx.BuildTrigrams()
+
+	os.Remove(tempFile)
+
+	return idx, nil
+}
+
+func SearchRepo(repo *Repo, query string) ([]int, error) {
+	idx, err := IndexRepo(repo)
+	if err != nil {
+		return nil, err
+	}
+
+	results := idx.Search(query)
+	return results, nil
+}
+
+func loadGitignore() {
+	gitignorePath := "/tmp/repos/.gitignore"
+
+	content, err := os.ReadFile(gitignorePath)
+	if err != nil {
+		// .gitignore doesn't exist, use defaults
+		return
+	}
+
+	lines := strings.Split(string(content), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		// Skip empty lines and comments
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		ignoredPatterns = append(ignoredPatterns, line)
+	}
+}
+
+func shouldIgnore(path string) bool {
+
+	if len(ignoredPatterns) == 0 {
+		loadGitignore()
+	}
+
+	for _, pattern := range ignoredPatterns {
+		if strings.Contains(path, pattern) {
+			return true
+		}
+	}
+
+	// Default patterns if .gitignore doesn't exist
+	defaultIgnored := []string{".git", "node_modules", ".DS_Store", "vendor", "dist", "build"}
+	for _, pattern := range defaultIgnored {
+		if strings.Contains(path, pattern) {
+			return true
+		}
+	}
+
+	return false
 }
