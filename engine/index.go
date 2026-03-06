@@ -3,8 +3,8 @@ package engine
 import (
     "bytes"
     "os"
-
     "github.com/edsrzf/mmap-go"
+    "sync"
 )
 
 var (
@@ -56,25 +56,54 @@ func (idx *Index) MapBoundaries(path string) error {
 func (idx *Index) BuildTrigrams() {
     idx.Trigrams = make(map[string][]int)
 
-    for lineNum, startOffset := range idx.LineOffsets {
-        endOffset := len(idx.data)
-        if lineNum+1 < len(idx.LineOffsets) {
-            endOffset = idx.LineOffsets[lineNum+1]
-        }
+    numWorkers := 8
+    lineChan := make(chan int, 100)
+    var wg sync.WaitGroup
+    var mu sync.Mutex
 
-        line := bytes.TrimRight(idx.data[startOffset:endOffset], "\r\n")
+    // Worker goroutines
+    for i := 0; i < numWorkers; i++ {
+        wg.Add(1)
+        go func() {
+            defer wg.Done()
+            
+            for lineNum := range lineChan {
+                startOffset := idx.LineOffsets[lineNum]
+                endOffset := len(idx.data)
+                if lineNum+1 < len(idx.LineOffsets) {
+                    endOffset = idx.LineOffsets[lineNum+1]
+                }
 
-        wrapped := make([]byte, 0, len(line)+2)
-        wrapped = append(wrapped, byte(start))
-        wrapped = append(wrapped, line...)
-        wrapped = append(wrapped, byte(end))
+                line := bytes.TrimRight(idx.data[startOffset:endOffset], "\r\n")
 
-        for i := 0; i <= len(wrapped)-3; i++ {
-            tri := string(wrapped[i : i+3])
+                wrapped := make([]byte, 0, len(line)+2)
+                wrapped = append(wrapped, byte(start))
+                wrapped = append(wrapped, line...)
+                wrapped = append(wrapped, byte(end))
 
-            if list := idx.Trigrams[tri]; len(list) == 0 || list[len(list)-1] != lineNum {
-                idx.Trigrams[tri] = append(idx.Trigrams[tri], lineNum)
+                lineTrigrams := make(map[string][]int)
+                for i := 0; i <= len(wrapped)-3; i++ {
+                    tri := string(wrapped[i : i+3])
+                    lineTrigrams[tri] = append(lineTrigrams[tri], lineNum)
+                }
+
+                mu.Lock()
+                for tri, lines := range lineTrigrams {
+                    if list := idx.Trigrams[tri]; len(list) == 0 || list[len(list)-1] != lineNum {
+                        idx.Trigrams[tri] = append(idx.Trigrams[tri], lines...)
+                    }
+                }
+                mu.Unlock()
             }
-        }
+        }()
     }
+
+    go func() {
+        for lineNum := range idx.LineOffsets {
+            lineChan <- lineNum
+        }
+        close(lineChan)
+    }()
+
+    wg.Wait()
 }

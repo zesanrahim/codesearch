@@ -2,8 +2,6 @@ package engine
 
 import "bytes"
 
-// ToDo: add paralellism for trigram building and searching
-
 func (idx *Index) getTrigrams(query string) []string {
     var trigrams []string
     for i := 0; i <= len(query)-3; i++ {
