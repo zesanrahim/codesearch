@@ -5,6 +5,7 @@ import (
     "os"
     "github.com/edsrzf/mmap-go"
     "sync"
+    "strings"
 )
 
 var (
@@ -106,4 +107,18 @@ func (idx *Index) BuildTrigrams() {
     }()
 
     wg.Wait()
+}
+
+func (idx *Index) GetLine(lineNum int) string {
+    if lineNum < 0 || lineNum >= len(idx.LineOffsets) {
+        return ""
+    }
+
+    lineStart := idx.LineOffsets[lineNum]
+    lineEnd := len(idx.data)
+    if lineNum+1 < len(idx.LineOffsets) {
+        lineEnd = idx.LineOffsets[lineNum+1]
+    }
+
+    return strings.TrimSpace(string(idx.data[lineStart:lineEnd]))
 }
