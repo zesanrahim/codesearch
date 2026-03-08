@@ -9,10 +9,14 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"bytes"
+	"bufio"
 )
 
 var (
 	ignoredPatterns []string
+	ignoreMutex sync.RWMutex
+	loadOnce	sync.Once
 )
 
 type Repo struct {
@@ -24,6 +28,7 @@ type Repo struct {
 }
 
 var (
+	
 	repoCache = make(map[string]*Repo)
 	cacheLock sync.RWMutex
 )
@@ -121,41 +126,81 @@ func DeleteRepo(repo *Repo) error {
 	return nil
 }
 
+
+
+func isBinaryFile(path string) bool {
+    ext := strings.ToLower(filepath.Ext(path))
+    binaryExts := map[string]bool{
+        ".exe": true, ".dll": true, ".so": true, ".bin": true,
+        ".jpg": true, ".jpeg": true, ".png": true, ".gif": true,
+        ".pdf": true, ".zip": true, ".tar": true, ".gz": true,
+    }
+    if binaryExts[ext] {
+        return true
+    }
+
+    return false
+}
+
 func IndexRepo(repo *Repo) (*engine.Index, error) {
-	idx := &engine.Index{}
-	allContent := ""
+    idx := &engine.Index{}
 
-	err := filepath.Walk(repo.RepoPath, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
+	
+
+    tempFile := fmt.Sprintf("/tmp/index_%s.txt", repo.Name)
+    file, err := os.Create(tempFile)
+    if err != nil {
+        return nil, err
+    }
+    defer file.Close()
+
+    writer := bufio.NewWriterWithSize(file, 4*1024*1024) // 4 mb
+
+    fileCount := 0
+
+    err = filepath.Walk(repo.RepoPath, func(path string, info os.FileInfo, err error) error {
+        if err != nil {
+            return nil
+        }
+		if info.Size() > 5*1024*1024 { // skip files larger than 5MB
 			return nil
 		}
 
-		if info.IsDir() || shouldIgnore(path) {
+		if isBinaryFile(path) {
 			return nil
 		}
 
-		content, err := os.ReadFile(path)
-		if err != nil {
-			return nil
-		}
+        if info.IsDir() || shouldIgnore(path) {
+            return nil
+        }
 
-		allContent += string(content) + "\n"
-		return nil
-	})
+        content, err := os.ReadFile(path)
+        if err != nil {
+            return nil
+        }
 
-	if err != nil {
-		return nil, err
-	}
+        writer.Write(content)
+        writer.WriteString("\n")
+        fileCount++
 
-	tempFile := fmt.Sprintf("/tmp/index_%s.txt", repo.Name)
-	os.WriteFile(tempFile, []byte(allContent), 0o644)
+        if fileCount%500 == 0 {
+            writer.Flush()
+        }
+        return nil
+    })
 
-	idx.MapBoundaries(tempFile)
-	idx.BuildTrigrams()
+    if err != nil {
+        return nil, err
+    }
 
-	os.Remove(tempFile)
+    writer.Flush()
 
-	return idx, nil
+    idx.MapBoundaries(tempFile)
+    idx.BuildTrigrams()
+
+    os.Remove(tempFile)
+
+    return idx, nil
 }
 
 func SearchRepo(repo *Repo, query string) ([]int, error) {
@@ -184,29 +229,45 @@ func loadGitignore() {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
+		ignoreMutex.Lock()
 		ignoredPatterns = append(ignoredPatterns, line)
+		ignoreMutex.Unlock()
 	}
 }
+
+
 
 func shouldIgnore(path string) bool {
 
-	if len(ignoredPatterns) == 0 {
-		loadGitignore()
-	}
+	loadOnce.Do(func() {
+        loadGitignore()
+    })
 
-	for _, pattern := range ignoredPatterns {
-		if strings.Contains(path, pattern) {
-			return true
-		}
-	}
+    ignoreMutex.RLock()
+    patterns := ignoredPatterns
+    ignoreMutex.RUnlock()
 
-	// Default patterns if .gitignore doesn't exist
-	defaultIgnored := []string{".git", "node_modules", ".DS_Store", "vendor", "dist", "build"}
-	for _, pattern := range defaultIgnored {
-		if strings.Contains(path, pattern) {
-			return true
-		}
-	}
+    if len(patterns) == 0 {
+        loadGitignore()
+        ignoreMutex.RLock()
+        patterns = ignoredPatterns
+        ignoreMutex.RUnlock()
+    }
 
-	return false
+    for _, pattern := range patterns {
+        if strings.Contains(path, pattern) {
+            return true
+        }
+    }
+
+    // Default patterns if .gitignore doesn't exist
+    defaultIgnored := []string{".git", "node_modules", ".DS_Store", "vendor", "dist", "build"}
+    for _, pattern := range defaultIgnored {
+        if strings.Contains(path, pattern) {
+            return true
+        }
+    }
+
+    return false
 }
+	
