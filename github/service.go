@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"bytes"
 	"bufio"
 )
 
@@ -145,47 +144,70 @@ func isBinaryFile(path string) bool {
 func IndexRepo(repo *Repo) (*engine.Index, error) {
     idx := &engine.Index{}
 
-	
-
     tempFile := fmt.Sprintf("/tmp/index_%s.txt", repo.Name)
     file, err := os.Create(tempFile)
     if err != nil {
-        return nil, err
+        return nil, fmt.Errorf("failed to create temp file: %w", err)
     }
     defer file.Close()
+    defer os.Remove(tempFile)  // Always clean up, even on error
 
-    writer := bufio.NewWriterWithSize(file, 4*1024*1024) // 4 mb
+    writer := bufio.NewWriter(file)
+    writerMutex := sync.Mutex{}
 
+    fileChan := make(chan string, 128)
+    var wg sync.WaitGroup
     fileCount := 0
+    countMutex := sync.Mutex{}
+
+    numWorkers := 8
+    for i := 0; i < numWorkers; i++ {
+        wg.Add(1)
+        go func() {
+            defer wg.Done()
+            for filePath := range fileChan {
+                content, err := os.ReadFile(filePath)
+                if err != nil {
+                    continue
+                }
+
+                writerMutex.Lock()
+                writer.Write(content)
+                writer.WriteString("\n")
+                writerMutex.Unlock()
+
+                countMutex.Lock()
+                fileCount++
+                if fileCount%500 == 0 {
+                    writer.Flush()
+                }
+                countMutex.Unlock()
+            }
+        }()
+    }
 
     err = filepath.Walk(repo.RepoPath, func(path string, info os.FileInfo, err error) error {
         if err != nil {
             return nil
         }
-		if info.Size() > 5*1024*1024 { // skip files larger than 5MB
-			return nil
-		}
 
-		if isBinaryFile(path) {
-			return nil
-		}
-
-        if info.IsDir() || shouldIgnore(path) {
+        if info.IsDir() {
             return nil
         }
 
-        content, err := os.ReadFile(path)
-        if err != nil {
+        if isBinaryFile(path) {
             return nil
         }
 
-        writer.Write(content)
-        writer.WriteString("\n")
-        fileCount++
-
-        if fileCount%500 == 0 {
-            writer.Flush()
+        if info.Size() > 5*1024*1024 {
+            return nil
         }
+
+        if shouldIgnore(path) {
+            return nil
+        }
+
+        fileChan <- path
         return nil
     })
 
@@ -193,12 +215,15 @@ func IndexRepo(repo *Repo) (*engine.Index, error) {
         return nil, err
     }
 
+    close(fileChan)
+    wg.Wait()
+
+    writerMutex.Lock()
     writer.Flush()
+    writerMutex.Unlock()
 
     idx.MapBoundaries(tempFile)
     idx.BuildTrigrams()
-
-    os.Remove(tempFile)
 
     return idx, nil
 }
