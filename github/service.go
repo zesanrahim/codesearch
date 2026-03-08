@@ -142,17 +142,27 @@ func isBinaryFile(path string) bool {
 }
 
 func IndexRepo(repo *Repo) (*engine.Index, error) {
-	
+
+	currentCommit, err := GetCurrentCommitHash(repo)
+	if err != nil {
+		fmt.Printf("Warning: couldn't get commit hash: %v\n", err)
+	}
+
 	cachedGob := fmt.Sprintf("/tmp/index_%s.gob", repo.Name)
 	if _, err := os.Stat(cachedGob); err == nil {
 		fmt.Printf("Loading index from cache for repo %s\n", repo.Name)
 		idx, err := engine.LoadIndex(cachedGob)
 		if err == nil {
-			return idx, nil
+		
+			if idx.CommitHash == currentCommit {
+				return idx, nil
+			}
+			fmt.Printf("Commit changed, rebuilding index...\n")
 		}
 		fmt.Printf("Failed to load cached index: %v. Rebuilding...\n", err)
 	}
-    idx := &engine.Index{}
+
+	idx := &engine.Index{}
 
     tempFile := fmt.Sprintf("/tmp/index_%s.txt", repo.Name)
     file, err := os.Create(tempFile)
@@ -160,17 +170,26 @@ func IndexRepo(repo *Repo) (*engine.Index, error) {
         return nil, fmt.Errorf("failed to create temp file: %w", err)
     }
     defer file.Close()
-    defer os.Remove(tempFile)  // Always clean up, even on error
+    defer os.Remove(tempFile)
 
     writer := bufio.NewWriter(file)
-    writerMutex := sync.Mutex{}
 
     fileChan := make(chan string, 128)
+    resultChan := make(chan struct {
+        content  []byte
+        filePath string
+    }, 128)
+
     var wg sync.WaitGroup
     fileCount := 0
     countMutex := sync.Mutex{}
 
+    var fileBoundaries []engine.FileBoundary
+    boundaryMutex := sync.Mutex{}
+    currentOffset := 0
+
     numWorkers := 8
+
     for i := 0; i < numWorkers; i++ {
         wg.Add(1)
         go func() {
@@ -180,21 +199,41 @@ func IndexRepo(repo *Repo) (*engine.Index, error) {
                 if err != nil {
                     continue
                 }
-
-                writerMutex.Lock()
-                writer.Write(content)
-                writer.WriteString("\n")
-                writerMutex.Unlock()
-
-                countMutex.Lock()
-                fileCount++
-                if fileCount%500 == 0 {
-                    writer.Flush()
-                }
-                countMutex.Unlock()
+                resultChan <- struct {
+                    content  []byte
+                    filePath string
+                }{content, filePath}
             }
         }()
     }
+
+    var writerWg sync.WaitGroup
+    writerWg.Add(1)
+    go func() {
+        defer writerWg.Done()
+        for result := range resultChan {
+            fileStart := currentOffset
+            writer.Write(result.content)
+            writer.WriteString("\n")
+            currentOffset += len(result.content) + 1
+
+            boundaryMutex.Lock()
+            relPath := GetRelativePath(result.filePath, repo.RepoPath)
+            fileBoundaries = append(fileBoundaries, engine.FileBoundary{
+                FilePath:    relPath,
+                StartOffset: fileStart,
+                EndOffset:   currentOffset,
+            })
+            boundaryMutex.Unlock()
+
+            countMutex.Lock()
+            fileCount++
+            if fileCount%500 == 0 {
+                writer.Flush()
+            }
+            countMutex.Unlock()
+        }
+    }()
 
     err = filepath.Walk(repo.RepoPath, func(path string, info os.FileInfo, err error) error {
         if err != nil {
@@ -228,28 +267,100 @@ func IndexRepo(repo *Repo) (*engine.Index, error) {
     close(fileChan)
     wg.Wait()
 
-    writerMutex.Lock()
+    close(resultChan)
+    writerWg.Wait()
+
+
     writer.Flush()
-    writerMutex.Unlock()
 
     idx.MapBoundaries(tempFile)
     idx.BuildTrigrams()
 
-	if err := engine.SaveIndex(idx, cachedGob); err != nil {
-		fmt.Printf("Failed to save index to cache: %v\n", err)
-	}
+    idx.FileBoundaries = fileBoundaries
+
+
+    idx.CommitHash = currentCommit
+    idx.RepoURL = GetRepoURL(repo)
+
+    if err := idx.SaveIndex(cachedGob); err != nil {
+        fmt.Printf("Failed to save index to cache: %v\n", err)
+    }
 
     return idx, nil
 }
 
-func SearchRepo(repo *Repo, query string) ([]int, error) {
-	idx, err := IndexRepo(repo)
-	if err != nil {
-		return nil, err
-	}
+func SearchRepo(repo *Repo, query string) ([]engine.SearchResult, error) {
+    idx, err := IndexRepo(repo)
+    if err != nil {
+        return nil, err
+    }
 
-	results := idx.Search(query)
-	return results, nil
+    commitHash := idx.CommitHash
+    repoURL := idx.RepoURL
+
+    matchLineNums := idx.Search(query)
+    var results []engine.SearchResult
+
+    for _, lineNum := range matchLineNums {
+    
+        if lineNum < 0 || lineNum >= len(idx.LineOffsets) {
+            continue
+        }
+        byteOffset := idx.LineOffsets[lineNum]
+
+
+        filePath, err := GetFileFromOffset(byteOffset, idx.FileBoundaries)
+        if err != nil {
+            continue
+        }
+
+        
+        var fileStartOffset int
+        for _, boundary := range idx.FileBoundaries {
+            if boundary.FilePath == filePath {
+                fileStartOffset = boundary.StartOffset
+                break
+            }
+        }
+
+        
+        offsetInFile := byteOffset - fileStartOffset
+
+        
+        absPath := filepath.Join(repo.RepoPath, filePath)
+        content, err := os.ReadFile(absPath)
+        if err != nil {
+            continue
+        }
+
+        
+        if offsetInFile > len(content) {
+            offsetInFile = len(content)
+        }
+        if offsetInFile < 0 {
+            offsetInFile = 0
+        }
+
+    
+        fileLine := 1
+        for i := 0; i < offsetInFile; i++ {
+            if content[i] == '\n' {
+                fileLine++
+            }
+        }
+
+        result := engine.SearchResult{
+            FilePath:   filePath,
+            Line:       fileLine,
+            Offset:     byteOffset,
+            CommitHash: commitHash,
+            RepoURL:    repoURL,
+        }
+
+        results = append(results, result)
+    }
+
+    return results, nil
 }
 
 func loadGitignore() {
@@ -257,14 +368,14 @@ func loadGitignore() {
 
 	content, err := os.ReadFile(gitignorePath)
 	if err != nil {
-		// .gitignore doesn't exist, use defaults
+		
 		return
 	}
 
 	lines := strings.Split(string(content), "\n")
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
-		// Skip empty lines and comments
+		
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}

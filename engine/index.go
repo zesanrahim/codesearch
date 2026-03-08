@@ -15,11 +15,20 @@ var (
     end   = 0x03
 )
 
+type FileBoundary struct {
+    FilePath    string
+    StartOffset int
+    EndOffset   int
+}
+
 type Index struct {
-    Data        []byte
-    Mmap        mmap.MMap
-    LineOffsets []int   
-    Trigrams    map[u32][]int
+    Data              []byte
+    Mmap              mmap.MMap
+    LineOffsets       []int
+    Trigrams          map[u32][]int
+    FileBoundaries    []FileBoundary
+    CommitHash        string  
+    RepoURL           string  
 }
 
 func bytesToTrigram(b []byte) u32 {

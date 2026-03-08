@@ -2,10 +2,29 @@ package engine
 
 import (
 	"encoding/gob"
+	"fmt"
 	"os"
 )
 
-func SaveIndex(idx *Index, filename string) error {
+type SearchResult struct {
+	FilePath   string
+	Line       int
+	Offset     int
+	Context    string
+	CommitHash string
+	RepoURL    string
+}
+
+func (sr *SearchResult) GetBlobURL() string {
+	if sr.CommitHash == "" || sr.RepoURL == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s/blob/%s/%s#L%d", sr.RepoURL, sr.CommitHash, sr.FilePath, sr.Line)
+}
+	
+	
+
+func (idx *Index) SaveIndex(filename string) error {
 	file, err := os.Create(filename)
 	if err != nil {
 		return err
