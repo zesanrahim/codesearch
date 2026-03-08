@@ -142,6 +142,16 @@ func isBinaryFile(path string) bool {
 }
 
 func IndexRepo(repo *Repo) (*engine.Index, error) {
+	
+	cachedGob := fmt.Sprintf("/tmp/index_%s.gob", repo.Name)
+	if _, err := os.Stat(cachedGob); err == nil {
+		fmt.Printf("Loading index from cache for repo %s\n", repo.Name)
+		idx, err := engine.LoadIndex(cachedGob)
+		if err == nil {
+			return idx, nil
+		}
+		fmt.Printf("Failed to load cached index: %v. Rebuilding...\n", err)
+	}
     idx := &engine.Index{}
 
     tempFile := fmt.Sprintf("/tmp/index_%s.txt", repo.Name)
@@ -224,6 +234,10 @@ func IndexRepo(repo *Repo) (*engine.Index, error) {
 
     idx.MapBoundaries(tempFile)
     idx.BuildTrigrams()
+
+	if err := engine.SaveIndex(idx, cachedGob); err != nil {
+		fmt.Printf("Failed to save index to cache: %v\n", err)
+	}
 
     return idx, nil
 }
