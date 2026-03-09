@@ -1,15 +1,17 @@
 package github
 
 import (
+    "runtime"
 	"codesearch/database"
-	"codesearch/engine"
 	"fmt"
+	"codesearch/engine"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"bufio"
+    "context"
 )
 
 var (
@@ -65,7 +67,48 @@ func GetRepo(name string) (repo *Repo, err error) {
 	return repo, nil
 }
 
-func CloneRepo(repo *Repo) error {
+
+func MultiCloneRepos(ctx context.Context, repos []*Repo) error {
+    if len(repos) == 0 {
+        return nil
+    }
+    if err := ctx.Err(); err != nil {
+        return err
+    }
+    workers := make(chan *Repo, len(repos))
+    var wg sync.WaitGroup
+
+
+    for w :=1; w <= 3; w++ {
+        wg.Add(1)
+        go func() {
+            defer wg.Done()
+            repoChan := make(chan *Repo)
+            for repo := range repoChan {
+                if err := ctx.Err(); err != nil {
+                    return 
+                }
+                if err := CloneRepo(ctx, repo); err != nil {
+                    fmt.Printf("Failed to clone repo %s: %v\n", repo.Name, err)
+                }
+            }
+        }()
+        }
+
+    for _, repo := range repos {
+        workers <- repo
+    }
+    close(workers)
+    wg.Wait()
+    return ctx.Err()
+}
+
+func CloneRepo(ctx context.Context, repo *Repo) error {
+
+    if err := ctx.Err(); err != nil {
+        return err
+    }
+
 
 	if _, err := os.Stat(repo.RepoPath); !os.IsNotExist(err) {
 		fmt.Printf("Repo %s already exists at %s\n", repo.Name, repo.RepoPath)
@@ -76,9 +119,12 @@ func CloneRepo(repo *Repo) error {
 		return fmt.Errorf("failed to create repo directory: %w", err)
 	}
 
-	cmd := exec.Command("git", "clone", repo.CloneURL, repo.RepoPath)
-	output, err := cmd.Output()
+	cmd := exec.CommandContext("git", "clone", repo.CloneURL, repo.RepoPath)
+	output, err := cmd.CombinedOutput()
 	if err != nil {
+        if ctx.Err() != nil {
+            return fmt.Errorf("clone aborted: %w", ctx.Err())
+        }
 		return fmt.Errorf("git clone failed: %w\nOutput: %s", err, string(output))
 	}
 
@@ -139,6 +185,46 @@ func isBinaryFile(path string) bool {
     }
 
     return false
+}
+
+func IndexMultiRepo(ctx context.Context, repos []*Repo) (map[string]*engine.Index, error) {
+    results := make(map[string]*engine.Index)
+    taskChan := make(chan *Repo, len(repos))
+    var mu sync.Mutex
+    var wg sync.WaitGroup
+    numWorkers := runtime.NumCPU() * 2
+
+    for i := 0; i < numWorkers; i++ {
+            wg.Add(1)
+            go func() {
+                defer wg.Done()
+                for r := range taskChan {
+                    select {
+                    case <-ctx.Done():
+                        return
+                    default:
+                        idx, err := IndexRepo(r)
+                        if err != nil {
+                            fmt.Printf("Failed to index repo %s: %v\n", r.Name, err)
+                            continue
+                        }
+                        
+                        // 5. Protect the shared map
+                        mu.Lock()
+                        results[r.Name] = idx
+                        mu.Unlock()
+                    }
+                }
+            }()
+        }
+
+    for _, repo := range repos {
+        taskChan <- repo
+    }
+    close(taskChan)
+
+    wg.Wait()
+    return results, ctx.Err()
 }
 
 func IndexRepo(repo *Repo) (*engine.Index, error) {
