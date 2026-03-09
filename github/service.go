@@ -209,7 +209,7 @@ func IndexMultiRepo(ctx context.Context, repos []*Repo) (map[string]*engine.Inde
                             continue
                         }
                         
-                        // 5. Protect the shared map
+                    
                         mu.Lock()
                         results[r.Name] = idx
                         mu.Unlock()
