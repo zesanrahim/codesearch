@@ -1,6 +1,6 @@
-# CodeSearch
+# codesearch
 
-Lightweight Dev. Tool searching code quickly.
+Lightweight Dev. Tool for searching code quickly.
 
 ## Features
 
@@ -10,6 +10,7 @@ Lightweight Dev. Tool searching code quickly.
 
 
 <img width="1582" height="970" alt="Image" src="https://github.com/user-attachments/assets/5f7b27a9-c3f3-4e64-92cb-2a1263870f6c" />
+
 ## Quick start
 Prerequisites: Go 1.20+ and `git`.
 
