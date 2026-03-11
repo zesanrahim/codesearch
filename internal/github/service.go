@@ -2,9 +2,9 @@ package github
 
 import (
     "runtime"
-	"codesearch/database"
+	"codesearch/internal/database"
 	"fmt"
-	"codesearch/engine"
+	"codesearch/internal/engine"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -119,7 +119,7 @@ func CloneRepo(ctx context.Context, repo *Repo) error {
 		return fmt.Errorf("failed to create repo directory: %w", err)
 	}
 
-	cmd := exec.CommandContext("git", "clone", repo.CloneURL, repo.RepoPath)
+	cmd := exec.CommandContext(ctx, "git", "clone", repo.CloneURL, repo.RepoPath)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
         if ctx.Err() != nil {
@@ -203,7 +203,7 @@ func IndexMultiRepo(ctx context.Context, repos []*Repo) (map[string]*engine.Inde
                     case <-ctx.Done():
                         return
                     default:
-                        idx, err := IndexRepo(r)
+                        idx, err := IndexRepo(ctx, r)
                         if err != nil {
                             fmt.Printf("Failed to index repo %s: %v\n", r.Name, err)
                             continue
@@ -227,14 +227,24 @@ func IndexMultiRepo(ctx context.Context, repos []*Repo) (map[string]*engine.Inde
     return results, ctx.Err()
 }
 
-func IndexRepo(repo *Repo) (*engine.Index, error) {
+func IndexRepo(ctx context.Context, repo *Repo) (*engine.Index, error) {
+	return IndexRepoWithProgress(ctx, repo, nil)
+}
+
+func IndexRepoWithProgress(ctx context.Context, repo *Repo, onProgress func(processed, total int)) (*engine.Index, error) {
+
+	for _, dir := range []string{"/tmp/codesearch/index", "/tmp/codesearch/tmp"} {
+		if err := os.MkdirAll(dir, os.ModePerm); err != nil {
+			return nil, fmt.Errorf("failed to create directory %s: %w", dir, err)
+		}
+	}
 
 	currentCommit, err := GetCurrentCommitHash(repo)
 	if err != nil {
 		fmt.Printf("Warning: couldn't get commit hash: %v\n", err)
 	}
 
-	cachedGob := fmt.Sprintf("/tmp/index_%s.gob", repo.Name)
+	cachedGob := fmt.Sprintf("/tmp/codesearch/index/%s.gob", repo.Name)
 	if _, err := os.Stat(cachedGob); err == nil {
 		fmt.Printf("Loading index from cache for repo %s\n", repo.Name)
 		idx, err := engine.LoadIndex(cachedGob)
@@ -250,7 +260,7 @@ func IndexRepo(repo *Repo) (*engine.Index, error) {
 
 	idx := &engine.Index{}
 
-    tempFile := fmt.Sprintf("/tmp/index_%s.txt", repo.Name)
+    tempFile := fmt.Sprintf("/tmp/codesearch/tmp/%s.txt", repo.Name)
     file, err := os.Create(tempFile)
     if err != nil {
         return nil, fmt.Errorf("failed to create temp file: %w", err)
@@ -259,6 +269,15 @@ func IndexRepo(repo *Repo) (*engine.Index, error) {
     defer os.Remove(tempFile)
 
     writer := bufio.NewWriter(file)
+
+    totalFiles := 0
+    filepath.Walk(repo.RepoPath, func(path string, info os.FileInfo, err error) error {
+        if err != nil || info.IsDir() || isBinaryFile(path) || info.Size() > 5*1024*1024 || shouldIgnore(path) {
+            return nil
+        }
+        totalFiles++
+        return nil
+    })
 
     fileChan := make(chan string, 128)
     resultChan := make(chan struct {
@@ -314,6 +333,9 @@ func IndexRepo(repo *Repo) (*engine.Index, error) {
 
             countMutex.Lock()
             fileCount++
+            if onProgress != nil {
+                onProgress(fileCount, totalFiles)
+            }
             if fileCount%500 == 0 {
                 writer.Flush()
             }
@@ -376,7 +398,7 @@ func IndexRepo(repo *Repo) (*engine.Index, error) {
 }
 
 func SearchRepo(repo *Repo, query string) ([]engine.SearchResult, error) {
-    idx, err := IndexRepo(repo)
+    idx, err := IndexRepo(context.Background(), repo)
     if err != nil {
         return nil, err
     }
@@ -435,10 +457,13 @@ func SearchRepo(repo *Repo, query string) ([]engine.SearchResult, error) {
             }
         }
 
+        contextStr := extractContext(content, fileLine)
+
         result := engine.SearchResult{
             FilePath:   filePath,
             Line:       fileLine,
             Offset:     byteOffset,
+            Context:    contextStr,
             CommitHash: commitHash,
             RepoURL:    repoURL,
         }
@@ -449,8 +474,23 @@ func SearchRepo(repo *Repo, query string) ([]engine.SearchResult, error) {
     return results, nil
 }
 
+
+func extractContext(content []byte, matchLine int) string {
+    lines := strings.Split(string(content), "\n")
+    const window = 10
+    start := matchLine - 1 - window 
+    if start < 0 {
+        start = 0
+    }
+    end := matchLine - 1 + window + 1
+    if end > len(lines) {
+        end = len(lines)
+    }
+    return strings.Join(lines[start:end], "\n")
+}
+
 func loadGitignore() {
-	gitignorePath := "/tmp/repos/.gitignore"
+	gitignorePath := "/tmp/codesearch/repos/.gitignore"
 
 	content, err := os.ReadFile(gitignorePath)
 	if err != nil {

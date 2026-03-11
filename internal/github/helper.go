@@ -1,7 +1,7 @@
 package github
 
 import (
-	"codesearch/engine"
+	"codesearch/internal/engine"
 	"fmt"
 	"os"
 	"os/exec"

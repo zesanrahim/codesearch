@@ -1,11 +1,17 @@
 package main
 
 import (
-	_ "codesearch/database"
-	"fmt"
+"codesearch/internal/tui"
+"fmt"
+"os"
+
+tea "github.com/charmbracelet/bubbletea"
 )
 
 func main() {
-	fmt.Println("Hello, World!")
-
+	p := tea.NewProgram(tui.InitialModel(), tea.WithAltScreen())
+	if _, err := p.Run(); err != nil {
+		fmt.Printf("Error: %v", err)
+		os.Exit(1)
+	}
 }
