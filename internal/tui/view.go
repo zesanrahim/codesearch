@@ -150,10 +150,17 @@ func (m Model) renderSearchMode() string {
 			selected = "   "
 		}
 
-		line := fmt.Sprintf("%s%s  %s",
+		matchInfo := ""
+		if m.MultiLineMode && r.TotalInputLines > 0 {
+			matchPercent := (float64(r.MatchedLines) / float64(r.TotalInputLines)) * 100
+			matchInfo = fmt.Sprintf("  %d/%d lines - %.0f%%", r.MatchedLines, r.TotalInputLines, matchPercent)
+		}
+
+		line := fmt.Sprintf("%s%s  %s%s",
 			selected,
 			styledFileLine,
 			lineNumStyle.Render(fmt.Sprintf("(line %d)", r.Line)),
+			matchInfo,
 		)
 
 		s += resultStyle.Render(fmt.Sprintf("%d.", num)) + line + "\n"

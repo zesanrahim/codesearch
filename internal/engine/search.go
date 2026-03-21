@@ -2,6 +2,7 @@ package engine
 
 import (
 	"bytes"
+	"strings"
 	"sync"
 	"runtime"
 )
@@ -145,4 +146,44 @@ func (idx *Index) linearSearch(query string) []int {
 
 	wg.Wait()
 	return results
+}
+
+func (idx *Index) SearchMultiple(queries []string) map[int][]int {
+	results := make(map[int][]int)
+	
+	for inputIdx, query := range queries {
+		trimmed := strings.TrimSpace(query)
+		if trimmed == "" {
+			continue
+		}
+		matches := idx.Search(trimmed)
+		for _, lineNum := range matches {
+			results[lineNum] = append(results[lineNum], inputIdx)
+		}
+	}
+	return results
+}
+
+func CalculateConsecutiveBonus(matchedIndices []int) int {
+	if len(matchedIndices) < 2 {
+		return 0
+	}
+	
+	sorted := make([]int, len(matchedIndices))
+	copy(sorted, matchedIndices)
+	for i := 0; i < len(sorted); i++ {
+		for j := i + 1; j < len(sorted); j++ {
+			if sorted[i] > sorted[j] {
+				sorted[i], sorted[j] = sorted[j], sorted[i]
+			}
+		}
+	}
+	
+	consecutive := 0
+	for i := 1; i < len(sorted); i++ {
+		if sorted[i] == sorted[i-1]+1 {
+			consecutive++
+		}
+	}
+	return consecutive
 }

@@ -7,12 +7,15 @@ import (
 )
 
 type SearchResult struct {
-	FilePath   string
-	Line       int
-	Offset     int
-	Context    string
-	CommitHash string
-	RepoURL    string
+	FilePath          string
+	Line              int
+	Offset            int
+	Context           string
+	CommitHash        string
+	RepoURL           string
+	MatchedLines      int     
+	TotalInputLines   int     
+	ConsecutiveBonus  float64 
 }
 
 func (sr *SearchResult) GetBlobURL() string {

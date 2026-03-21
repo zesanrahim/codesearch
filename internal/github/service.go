@@ -12,6 +12,7 @@ import (
 	"sync"
 	"bufio"
     "context"
+	"sort"
 )
 
 var (
@@ -546,4 +547,113 @@ func shouldIgnore(path string) bool {
 
     return false
 }
+
+func SearchRepoMultiLine(repo *Repo, codeLines []string) ([]engine.SearchResult, error) {
+	var validLines []string
+	for _, line := range codeLines {
+		if strings.TrimSpace(line) != "" {
+			validLines = append(validLines, line)
+		}
+	}
+
+	if len(validLines) == 0 {
+		return nil, fmt.Errorf("no valid lines in query")
+	}
+
+	idx, err := IndexRepo(context.Background(), repo)
+	if err != nil {
+		return nil, err
+	}
+
+	commitHash := idx.CommitHash
+	repoURL := idx.RepoURL
+
+	matchData := idx.SearchMultiple(validLines)
+
+	var results []engine.SearchResult
+	for lineNum, matchedInputIndices := range matchData {
+		if lineNum < 0 || lineNum >= len(idx.LineOffsets) {
+			continue
+		}
+
+		byteOffset := idx.LineOffsets[lineNum]
+		filePath, err := GetFileFromOffset(byteOffset, idx.FileBoundaries)
+		if err != nil {
+			continue
+		}
+
+		var fileStartOffset int
+		for _, boundary := range idx.FileBoundaries {
+			if boundary.FilePath == filePath {
+				fileStartOffset = boundary.StartOffset
+				break
+			}
+		}
+
+		offsetInFile := byteOffset - fileStartOffset
+
+		absPath := filepath.Join(repo.RepoPath, filePath)
+		content, err := os.ReadFile(absPath)
+		if err != nil {
+			continue
+		}
+
+		if offsetInFile > len(content) {
+			offsetInFile = len(content)
+		}
+		if offsetInFile < 0 {
+			offsetInFile = 0
+		}
+
+		fileLine := 1
+		for i := 0; i < offsetInFile; i++ {
+			if content[i] == '\n' {
+				fileLine++
+			}
+		}
+
+		contextStr := extractContext(content, fileLine)
+
+		matchCount := len(matchedInputIndices)
+		consecutiveBonus := engine.CalculateConsecutiveBonus(matchedInputIndices)
+		consecutiveScore := float64(consecutiveBonus) / float64(len(validLines)-1) * 10.0
+		if len(validLines) <= 1 {
+			consecutiveScore = 0
+		}
+
+		result := engine.SearchResult{
+			FilePath:        filePath,
+			Line:            fileLine,
+			Offset:          byteOffset,
+			Context:         contextStr,
+			CommitHash:      commitHash,
+			RepoURL:         repoURL,
+			MatchedLines:    matchCount,
+			TotalInputLines: len(validLines),
+			ConsecutiveBonus: consecutiveScore,
+		}
+
+		results = append(results, result)
+	}
+
+	sort.Slice(results, func(i, j int) bool {
+		scoreI := (float64(results[i].MatchedLines) / float64(results[i].TotalInputLines)) * 100
+		scoreJ := (float64(results[j].MatchedLines) / float64(results[j].TotalInputLines)) * 100
+
+		scoreI += results[i].ConsecutiveBonus
+		scoreJ += results[j].ConsecutiveBonus
+
+		if scoreI != scoreJ {
+			return scoreI > scoreJ
+		}
+
+		if results[i].FilePath != results[j].FilePath {
+			return results[i].FilePath < results[j].FilePath
+		}
+		return results[i].Line < results[j].Line
+	})
+
+	return results, nil
+}
+
 	

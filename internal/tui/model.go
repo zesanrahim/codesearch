@@ -34,6 +34,8 @@ type Model struct {
 	SelectedResult int
 	Fullscreen     bool
 	FullscreenScroll int
+	MultiLineMode    bool
+	QueryLines       []string
 }
 
 func InitialModel() Model {

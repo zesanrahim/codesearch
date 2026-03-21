@@ -52,6 +52,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case SearchMultiLineResultMsg:
+		if msg.Err != nil {
+			m.Status = fmt.Sprintf("[error] Search failed: %v", msg.Err)
+		} else if len(msg.Results) == 0 {
+			m.Status = fmt.Sprintf("No matches found for %d-line query", msg.QueryLineCount)
+			m.SearchResults = nil
+		} else {
+			m.Status = fmt.Sprintf("[ok] Found %d matches (%d-line query)", len(msg.Results), msg.QueryLineCount)
+			m.SearchResults = msg.Results
+			m.MultiLineMode = true
+			m.ScrollOffset = 0
+			m.SelectedResult = 0
+		}
+		return m, nil
+
 	case CachedReposMsg:
 		if len(msg.Repos) > 0 {
 			m.Repos = msg.Repos
@@ -112,9 +127,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.Status = "[error] No repos indexed yet. Add a repo first (Tab to switch)."
 					return m, nil
 				}
-				m.Status = fmt.Sprintf("Searching for '%s'...", value)
-				m.SearchResults = nil
-				return m, SearchRepos(value, m.Repos)
+				
+				lines := strings.Split(value, "\n")
+				var validLines []string
+				for _, line := range lines {
+					if strings.TrimSpace(line) != "" {
+						validLines = append(validLines, line)
+					}
+				}
+				
+				if len(validLines) > 1 {
+					m.Status = fmt.Sprintf("Searching for %d-line pattern...", len(validLines))
+					m.SearchResults = nil
+					m.MultiLineMode = true
+					m.QueryLines = validLines
+					return m, SearchReposMultiLine(validLines, m.Repos)
+				} else {
+					m.Status = fmt.Sprintf("Searching for '%s'...", value)
+					m.SearchResults = nil
+					m.MultiLineMode = false
+					return m, SearchRepos(value, m.Repos)
+				}
 			}
 
 			m.Status = fmt.Sprintf("Cloning and indexing: %s", value)

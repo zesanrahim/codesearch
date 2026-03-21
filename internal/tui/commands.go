@@ -27,6 +27,12 @@ type SearchResultMsg struct {
 	Err     error
 }
 
+type SearchMultiLineResultMsg struct {
+	Results      []engine.SearchResult
+	QueryLineCount int
+	Err          error
+}
+
 type CachedReposMsg struct {
 	Repos   []*github.Repo
 	Results []string
@@ -154,6 +160,25 @@ func SearchRepos(query string, repos []*github.Repo) tea.Cmd {
 		return SearchResultMsg{
 			Query:   query,
 			Results: allResults,
+		}
+	}
+}
+
+func SearchReposMultiLine(queryLines []string, repos []*github.Repo) tea.Cmd {
+	return func() tea.Msg {
+		var allResults []engine.SearchResult
+		for _, repo := range repos {
+			results, err := github.SearchRepoMultiLine(repo, queryLines)
+			if err != nil {
+				continue
+			}
+			allResults = append(allResults, results...)
+		}
+
+		return SearchMultiLineResultMsg{
+			Results:        allResults,
+			QueryLineCount: len(queryLines),
+			Err:            nil,
 		}
 	}
 }
