@@ -1,0 +1,36 @@
+{
+  "name": "codesearch",
+  "version": "1.0.0",
+  "description": "Lightweight Dev. Tool for searching code quickly.",
+  "main": "main.js",
+  "scripts": {
+    "dev:vite": "vite",
+    "dev:electron": "wait-on http://localhost:5173 && electron .",
+    "dev": "concurrently -k \"npm:dev:vite\" \"npm:dev:electron\"",
+    "build": "vite build",
+    "start": "electron ."
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cheenoxd/codesearch.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/cheenoxd/codesearch/issues"
+  },
+  "homepage": "https://github.com/cheenoxd/codesearch#readme",
+  "devDependencies": {
+    "@vitejs/plugin-react": "^6.0.1",
+    "concurrently": "^9.2.1",
+    "electron": "^41.2.1",
+    "vite": "^8.0.8",
+    "wait-on": "^9.0.5"
+  },
+  "dependencies": {
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5"
+  }
+}
