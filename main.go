@@ -1,11 +1,11 @@
 package main
 
 import (
-"codesearch/internal/tui"
-"fmt"
-"os"
+	"codesearch/internal/tui"
+	"fmt"
+	"os"
 
-tea "github.com/charmbracelet/bubbletea"
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func main() {

@@ -2,183 +2,158 @@ package engine
 
 import (
 	"bytes"
+	"runtime"
+	"slices"
 	"strings"
 	"sync"
-	"runtime"
 )
 
-func (idx *Index) getTrigrams(query string) []u32 {
-	var trigrams []u32
+func getTrigrams(query string) []u32 {
 	queryBytes := []byte(query)
+	if len(queryBytes) < 3 {
+		return nil
+	}
+
+	trigrams := make([]u32, 0, len(queryBytes)-2)
 	for i := 0; i <= len(queryBytes)-3; i++ {
-		tri := bytesToTrigram(queryBytes[i : i+3])
-		trigrams = append(trigrams, tri)
+		trigrams = append(trigrams, bytesToTrigram(queryBytes[i:i+3]))
 	}
 	return trigrams
 }
 
+// Search returns the line numbers containing query, in ascending order.
+// Queries shorter than a trigram can't use the index, so they fall back to a
+// full scan.
 func (idx *Index) Search(query string) []int {
 	if len(query) < 3 {
-		return idx.linearSearch(query)
+		return idx.scanLines(nil, query)
 	}
 
-	trigrams := idx.getTrigrams(query)
+	trigrams := getTrigrams(query)
 
-	var results []int
-	firstTrigram := trigrams[0]
-
-	if lines, exists := idx.Trigrams[firstTrigram]; exists {
-		results = lines
-	} else {
-		return []int{}
+	candidates, exists := idx.Trigrams[trigrams[0]]
+	if !exists {
+		return nil
 	}
 
-	for i := 1; i < len(trigrams); i++ {
-		if lines, exists := idx.Trigrams[trigrams[i]]; exists {
-			results = idx.intersect(results, lines)
-		} else {
-			return []int{}
+	for _, tri := range trigrams[1:] {
+		lines, exists := idx.Trigrams[tri]
+		if !exists {
+			return nil
+		}
+		candidates = intersect(candidates, lines)
+		if len(candidates) == 0 {
+			return nil
 		}
 	}
 
-	return idx.filterResults(results, query)
+	// The trigram index only narrows the search: a line can hold every trigram
+	// of the query without holding the query itself, so verify each candidate.
+	return idx.scanLines(candidates, query)
 }
 
-func (idx *Index) intersect(a, b []int) []int {
-	if len(a) == 0 {
-		return b
-	}
-	if len(b) == 0 {
-		return a
-	}
-
+// intersect returns the values present in both sorted slices.
+func intersect(a, b []int) []int {
 	var result []int
+
 	i, j := 0, 0
 	for i < len(a) && j < len(b) {
-		if a[i] == b[j] {
+		switch {
+		case a[i] == b[j]:
 			result = append(result, a[i])
 			i++
 			j++
-		} else if a[i] < b[j] {
+		case a[i] < b[j]:
 			i++
-		} else {
+		default:
 			j++
 		}
 	}
 	return result
 }
 
-func (idx *Index) filterResults(lineNums []int, query string) []int {
-	var results []int
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-
-	numWorkers := runtime.NumCPU()
-	lineChan := make(chan int, 100)
-
-	for i := 0; i < numWorkers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for lineNum := range lineChan {
-				lineStart := idx.LineOffsets[lineNum]
-				lineEnd := len(idx.Data)
-				if lineNum+1 < len(idx.LineOffsets) {
-					lineEnd = idx.LineOffsets[lineNum+1]
-				}
-				line := idx.Data[lineStart:lineEnd]
-
-				if bytes.Contains(line, []byte(query)) {
-					mu.Lock()
-					results = append(results, lineNum)
-					mu.Unlock()
-				}
-			}
-		}()
+// scanLines reports which of the candidate lines contain query. A nil
+// candidates slice scans the whole index.
+func (idx *Index) scanLines(candidates []int, query string) []int {
+	total := len(candidates)
+	if candidates == nil {
+		total = len(idx.LineOffsets)
+	}
+	if total == 0 || query == "" {
+		return nil
 	}
 
-	go func() {
-		for _, lineNum := range lineNums {
-			lineChan <- lineNum
-		}
-		close(lineChan)
-	}()
+	needle := []byte(query)
 
+	numWorkers := min(runtime.NumCPU(), total)
+	chunk := (total + numWorkers - 1) / numWorkers
+
+	// Each worker collects into its own slice so the scan doesn't serialise on
+	// a shared mutex, then the chunks are concatenated in order.
+	partials := make([][]int, numWorkers)
+
+	var wg sync.WaitGroup
+	for w := range numWorkers {
+		start := w * chunk
+		end := min(start+chunk, total)
+		if start >= end {
+			continue
+		}
+
+		wg.Add(1)
+		go func(w, start, end int) {
+			defer wg.Done()
+
+			var local []int
+			for i := start; i < end; i++ {
+				lineNum := i
+				if candidates != nil {
+					lineNum = candidates[i]
+				}
+				if bytes.Contains(idx.lineBytes(lineNum), needle) {
+					local = append(local, lineNum)
+				}
+			}
+			partials[w] = local
+		}(w, start, end)
+	}
 	wg.Wait()
+
+	var results []int
+	for _, partial := range partials {
+		results = append(results, partial...)
+	}
+	slices.Sort(results)
 	return results
 }
 
-func (idx *Index) linearSearch(query string) []int {
-	var results []int
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-
-	numWorkers := runtime.NumCPU()
-	lineChan := make(chan int, 100)
-
-	for i := 0; i < numWorkers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for lineNum := range lineChan {
-				lineStart := idx.LineOffsets[lineNum]
-				lineEnd := len(idx.Data)
-				if lineNum+1 < len(idx.LineOffsets) {
-					lineEnd = idx.LineOffsets[lineNum+1]
-				}
-				line := idx.Data[lineStart:lineEnd]
-
-				if bytes.Contains(line, []byte(query)) {
-					mu.Lock()
-					results = append(results, lineNum)
-					mu.Unlock()
-				}
-			}
-		}()
-	}
-
-	go func() {
-		for lineNum := range idx.LineOffsets {
-			lineChan <- lineNum
-		}
-		close(lineChan)
-	}()
-
-	wg.Wait()
-	return results
-}
-
+// SearchMultiple maps each matching line number to the indices of the input
+// queries that matched it.
 func (idx *Index) SearchMultiple(queries []string) map[int][]int {
 	results := make(map[int][]int)
-	
+
 	for inputIdx, query := range queries {
 		trimmed := strings.TrimSpace(query)
 		if trimmed == "" {
 			continue
 		}
-		matches := idx.Search(trimmed)
-		for _, lineNum := range matches {
+		for _, lineNum := range idx.Search(trimmed) {
 			results[lineNum] = append(results[lineNum], inputIdx)
 		}
 	}
 	return results
 }
 
+// CalculateConsecutiveBonus counts adjacent pairs among the matched input
+// lines, so a block matched in its original order scores above scattered hits.
 func CalculateConsecutiveBonus(matchedIndices []int) int {
 	if len(matchedIndices) < 2 {
 		return 0
 	}
-	
-	sorted := make([]int, len(matchedIndices))
-	copy(sorted, matchedIndices)
-	for i := 0; i < len(sorted); i++ {
-		for j := i + 1; j < len(sorted); j++ {
-			if sorted[i] > sorted[j] {
-				sorted[i], sorted[j] = sorted[j], sorted[i]
-			}
-		}
-	}
-	
+
+	sorted := slices.Clone(matchedIndices)
+	slices.Sort(sorted)
+
 	consecutive := 0
 	for i := 1; i < len(sorted); i++ {
 		if sorted[i] == sorted[i-1]+1 {

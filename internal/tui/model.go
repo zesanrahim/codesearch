@@ -12,27 +12,27 @@ import (
 type Mode int
 
 const (
-	ModeAdd    Mode = iota
+	ModeAdd Mode = iota
 	ModeSearch
 )
 
 type Model struct {
-	TextInput      textinput.Model
-	Width          int
-	Height         int
-	Results        []string
-	Status         string
-	Repos          []*github.Repo
-	Mode           Mode
-	SearchResults  []engine.SearchResult
-	SearchQuery    string
-	ScrollOffset   int
-	ContextLines   int
-	Progress       progress.Model
-	Indexing       bool
-	IndexPercent   float64
-	SelectedResult int
-	Fullscreen     bool
+	TextInput        textinput.Model
+	Width            int
+	Height           int
+	Results          []string
+	Status           string
+	Repos            []*github.Repo
+	Mode             Mode
+	SearchResults    []engine.SearchResult
+	SearchQuery      string
+	ScrollOffset     int
+	ContextLines     int
+	Progress         progress.Model
+	Indexing         bool
+	IndexPercent     float64
+	SelectedResult   int
+	Fullscreen       bool
 	FullscreenScroll int
 	MultiLineMode    bool
 	QueryLines       []string

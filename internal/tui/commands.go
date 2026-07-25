@@ -28,9 +28,9 @@ type SearchResultMsg struct {
 }
 
 type SearchMultiLineResultMsg struct {
-	Results      []engine.SearchResult
+	Results        []engine.SearchResult
 	QueryLineCount int
-	Err          error
+	Err            error
 }
 
 type CachedReposMsg struct {

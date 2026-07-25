@@ -1,8 +1,8 @@
 package database
 
 import (
+	"errors"
 	"fmt"
-	"log"
 	"os"
 	"sync"
 
@@ -11,35 +11,37 @@ import (
 )
 
 var (
-	once   sync.Once
-	client *supabase.Client
+	once    sync.Once
+	client  *supabase.Client
+	initErr error
 )
 
-func initSupabase() *supabase.Client {
-	err := godotenv.Load()
-	if err != nil {
-		log.Fatal("Error loading .env file")
+func initSupabase() (*supabase.Client, error) {
+	// A missing .env is not fatal: the credentials may already be exported.
+	if err := godotenv.Load(); err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("loading .env: %w", err)
 	}
 
 	conf := supabase.Config{
 		ApiKey:     os.Getenv("SUPABASE_API_KEY"),
 		ProjectRef: os.Getenv("SUPABASE_URL"),
 	}
-
-	client, err = supabase.New(conf)
-	if err != nil {
-		fmt.Println("Failed to connect to  client")
+	if conf.ApiKey == "" || conf.ProjectRef == "" {
+		return nil, errors.New("SUPABASE_API_KEY and SUPABASE_URL must be set")
 	}
 
-	fmt.Println("Supabase client initialized successfully!")
-	return client
+	c, err := supabase.New(conf)
+	if err != nil {
+		return nil, fmt.Errorf("connecting to supabase: %w", err)
+	}
+	return c, nil
 }
 
-// in go, if a function starts with lower case its private
-func GetClient() *supabase.Client {
-
+// GetClient lazily builds the shared Supabase client, returning the same error
+// to every caller if initialisation failed.
+func GetClient() (*supabase.Client, error) {
 	once.Do(func() {
-		initSupabase()
+		client, initErr = initSupabase()
 	})
-	return client
+	return client, initErr
 }

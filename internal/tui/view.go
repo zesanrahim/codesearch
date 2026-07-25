@@ -76,7 +76,7 @@ func (m Model) View() string {
 
 	repoCount := fmt.Sprintf("%d repo(s) indexed", len(m.Repos))
 	footer := lipgloss.NewStyle().
-		Width(m.Width - 4).
+		Width(m.Width-4).
 		Border(lipgloss.NormalBorder(), true, false, false, false).
 		BorderForeground(gray).
 		Foreground(gray).

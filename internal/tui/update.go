@@ -127,7 +127,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.Status = "[error] No repos indexed yet. Add a repo first (Tab to switch)."
 					return m, nil
 				}
-				
+
 				lines := strings.Split(value, "\n")
 				var validLines []string
 				for _, line := range lines {
@@ -135,7 +135,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						validLines = append(validLines, line)
 					}
 				}
-				
+
 				if len(validLines) > 1 {
 					m.Status = fmt.Sprintf("Searching for %d-line pattern...", len(validLines))
 					m.SearchResults = nil
