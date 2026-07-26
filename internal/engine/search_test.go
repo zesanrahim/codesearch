@@ -321,27 +321,3 @@ func TestGetBlobURL(t *testing.T) {
 		t.Errorf("GetBlobURL() without commit metadata = %q, want empty", got)
 	}
 }
-
-func BenchmarkSearch(b *testing.B) {
-	var corpus strings.Builder
-	for i := range 50000 {
-		fmt.Fprintf(&corpus, "func handler%d(w http.ResponseWriter, r *http.Request) {\n", i)
-	}
-
-	path := filepath.Join(b.TempDir(), "corpus.txt")
-	if err := os.WriteFile(path, []byte(corpus.String()), 0o644); err != nil {
-		b.Fatalf("writing corpus: %v", err)
-	}
-
-	idx := &Index{}
-	if err := idx.MapBoundaries(path); err != nil {
-		b.Fatalf("MapBoundaries: %v", err)
-	}
-	defer idx.Close()
-	idx.BuildTrigrams()
-
-	b.ResetTimer()
-	for b.Loop() {
-		idx.Search("http.ResponseWriter")
-	}
-}
