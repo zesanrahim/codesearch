@@ -77,6 +77,31 @@ func GetRelativePath(fullPath string, repoPath string) string {
 	return strings.TrimPrefix(fullPath, repoPath+"/")
 }
 
+func ParseRepoURL(rawURL string) (org, name string, err error) {
+	s := strings.TrimSpace(rawURL)
+	s = strings.TrimSuffix(s, "/")
+	s = strings.TrimSuffix(s, ".git")
+	if s == "" {
+		return "", "", fmt.Errorf("empty repository URL")
+	}
+
+	// Drop the scheme so what remains is host/path for both URL forms.
+	if i := strings.Index(s, "://"); i != -1 {
+		s = s[i+len("://"):]
+	}
+	// SSH shorthand separates host from path with a colon: git@github.com:org/repo.
+	if strings.Contains(s, "@") {
+		s = strings.Replace(s, ":", "/", 1)
+	}
+
+	parts := strings.FieldsFunc(s, func(r rune) bool { return r == '/' })
+	if len(parts) < 2 {
+		return "", "", fmt.Errorf("cannot parse organization and repository from %q", rawURL)
+	}
+
+	return parts[len(parts)-2], parts[len(parts)-1], nil
+}
+
 func IsGitRepo(path string) bool {
 	cmd := exec.Command("git", "-C", path, "rev-parse", "--git-dir")
 	err := cmd.Run()

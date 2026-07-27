@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"codesearch/internal/database"
 	"codesearch/internal/engine"
+	"codesearch/internal/paths"
 	"context"
 	"errors"
 	"fmt"
@@ -23,11 +24,26 @@ var (
 )
 
 type Repo struct {
+	Org      string
 	Name     string
 	RepoPath string
 	CloneURL string
 	// LastFetched time.Time
 	// Size        int64
+}
+
+func NewRepo(cloneURL string) (*Repo, error) {
+	org, name, err := ParseRepoURL(cloneURL)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Repo{
+		Org:      org,
+		Name:     name,
+		RepoPath: paths.RepoDir(org, name),
+		CloneURL: cloneURL,
+	}, nil
 }
 
 var (
@@ -122,7 +138,7 @@ func CloneRepo(ctx context.Context, repo *Repo) error {
 	}
 
 	if _, err := os.Stat(repo.RepoPath); !os.IsNotExist(err) {
-		fmt.Printf("Repo %s already exists at %s\n", repo.Name, repo.RepoPath)
+		fmt.Fprintf(os.Stderr, "Repo %s already exists at %s\n", repo.Name, repo.RepoPath)
 		return nil
 	}
 
@@ -139,7 +155,7 @@ func CloneRepo(ctx context.Context, repo *Repo) error {
 		return fmt.Errorf("git clone failed: %w\nOutput: %s", err, string(output))
 	}
 
-	fmt.Printf("Successfully cloned repo %s\n", repo.Name)
+	fmt.Fprintf(os.Stderr, "Successfully cloned repo %s\n", repo.Name)
 	return nil
 
 }
@@ -147,7 +163,7 @@ func CloneRepo(ctx context.Context, repo *Repo) error {
 func FetchRepo(repo *Repo) error {
 
 	if _, err := os.Stat(repo.RepoPath); os.IsNotExist(err) {
-		fmt.Printf("Repo %s does not exists at %s\n", repo.Name, repo.RepoPath)
+		fmt.Fprintf(os.Stderr, "Repo %s does not exists at %s\n", repo.Name, repo.RepoPath)
 		return nil
 	}
 	cmd := exec.Command("git", "-C", repo.RepoPath, "fetch", "--prune")
@@ -177,7 +193,7 @@ func DeleteRepo(repo *Repo) error {
 	delete(repoCache, repo.Name)
 	cacheLock.Unlock()
 
-	fmt.Printf("Repo has been deleted")
+	fmt.Fprintf(os.Stderr, "Repo has been deleted")
 
 	return nil
 }
@@ -214,7 +230,7 @@ func IndexMultiRepo(ctx context.Context, repos []*Repo) (map[string]*engine.Inde
 				default:
 					idx, err := IndexRepo(ctx, r)
 					if err != nil {
-						fmt.Printf("Failed to index repo %s: %v\n", r.Name, err)
+						fmt.Fprintf(os.Stderr, "Failed to index repo %s: %v\n", r.Name, err)
 						continue
 					}
 
@@ -241,7 +257,10 @@ func IndexRepo(ctx context.Context, repo *Repo) (*engine.Index, error) {
 
 func IndexRepoWithProgress(ctx context.Context, repo *Repo, onProgress func(processed, total int)) (*engine.Index, error) {
 
-	for _, dir := range []string{"/tmp/codesearch/index", "/tmp/codesearch/tmp"} {
+	cachedGob := paths.IndexFile(repo.Org, repo.Name)
+	tempFile := paths.CorpusFile(repo.Org, repo.Name)
+
+	for _, dir := range []string{filepath.Dir(cachedGob), filepath.Dir(tempFile)} {
 		if err := os.MkdirAll(dir, os.ModePerm); err != nil {
 			return nil, fmt.Errorf("failed to create directory %s: %w", dir, err)
 		}
@@ -249,32 +268,33 @@ func IndexRepoWithProgress(ctx context.Context, repo *Repo, onProgress func(proc
 
 	currentCommit, err := GetCurrentCommitHash(repo)
 	if err != nil {
-		fmt.Printf("Warning: couldn't get commit hash: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Warning: couldn't get commit hash: %v\n", err)
 	}
 
-	cachedGob := fmt.Sprintf("/tmp/codesearch/index/%s.gob", repo.Name)
 	if _, err := os.Stat(cachedGob); err == nil {
-		fmt.Printf("Loading index from cache for repo %s\n", repo.Name)
+		fmt.Fprintf(os.Stderr, "Loading index from cache for repo %s\n", repo.Name)
 		idx, err := engine.LoadIndex(cachedGob)
 		if err == nil {
 
 			if idx.CommitHash == currentCommit {
 				return idx, nil
 			}
-			fmt.Printf("Commit changed, rebuilding index...\n")
+			fmt.Fprintf(os.Stderr, "Commit changed, rebuilding index...\n")
 		}
-		fmt.Printf("Failed to load cached index: %v. Rebuilding...\n", err)
+		fmt.Fprintf(os.Stderr, "Failed to load cached index: %v. Rebuilding...\n", err)
 	}
 
 	idx := &engine.Index{}
 
-	tempFile := fmt.Sprintf("/tmp/codesearch/tmp/%s.txt", repo.Name)
 	file, err := os.Create(tempFile)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create temp file: %w", err)
 	}
 	defer file.Close()
-	defer os.Remove(tempFile)
+	// The corpus is not deleted: the saved index records its path and re-maps it
+	// on load, so removing it here made every cached index unloadable and forced
+	// a full re-index on each run. One corpus is kept per repository, overwritten
+	// when that repository is re-indexed.
 
 	writer := bufio.NewWriter(file)
 
@@ -399,7 +419,7 @@ func IndexRepoWithProgress(ctx context.Context, repo *Repo, onProgress func(proc
 	idx.RepoURL = GetRepoURL(repo)
 
 	if err := idx.SaveIndex(cachedGob); err != nil {
-		fmt.Printf("Failed to save index to cache: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Failed to save index to cache: %v\n", err)
 	}
 
 	return idx, nil
@@ -491,7 +511,7 @@ func extractContext(content []byte, matchLine int) string {
 }
 
 func loadGitignore() {
-	gitignorePath := "/tmp/codesearch/repos/.gitignore"
+	gitignorePath := filepath.Join(paths.ReposDir(), ".gitignore")
 
 	content, err := os.ReadFile(gitignorePath)
 	if err != nil {

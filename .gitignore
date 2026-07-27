@@ -1,7 +1,12 @@
 .env
 .DS_Store
-node_modules/
-dist/
 
 # Compiled binary
 /codesearch
+
+# Benchmark and profile artifacts
+bench-base.txt
+bench-new.txt
+profiles/
+*.prof
+*.test
