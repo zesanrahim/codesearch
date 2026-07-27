@@ -291,10 +291,6 @@ func IndexRepoWithProgress(ctx context.Context, repo *Repo, onProgress func(proc
 		return nil, fmt.Errorf("failed to create temp file: %w", err)
 	}
 	defer file.Close()
-	// The corpus is not deleted: the saved index records its path and re-maps it
-	// on load, so removing it here made every cached index unloadable and forced
-	// a full re-index on each run. One corpus is kept per repository, overwritten
-	// when that repository is re-indexed.
 
 	writer := bufio.NewWriter(file)
 

@@ -85,11 +85,9 @@ func ParseRepoURL(rawURL string) (org, name string, err error) {
 		return "", "", fmt.Errorf("empty repository URL")
 	}
 
-	// Drop the scheme so what remains is host/path for both URL forms.
 	if i := strings.Index(s, "://"); i != -1 {
 		s = s[i+len("://"):]
 	}
-	// SSH shorthand separates host from path with a colon: git@github.com:org/repo.
 	if strings.Contains(s, "@") {
 		s = strings.Replace(s, ":", "/", 1)
 	}
