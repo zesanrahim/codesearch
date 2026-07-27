@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"os"
 
 	"codesearch/internal/github"
+	"codesearch/internal/web"
 )
 
 const usage = `codesearch — trigram code search over cloned repositories.
@@ -14,6 +16,9 @@ Usage:
   codesearch index <repo-url>   Clone and index a repository
   codesearch search <query>     Search every indexed repository
   codesearch list               List indexed repositories
+  codesearch serve              Run the PR review server
+
+serve reads GITHUB_TOKEN, and CODESEARCH_ORG for the default inbox org.
 `
 
 func main() {
@@ -30,6 +35,8 @@ func main() {
 		err = runSearch(os.Args[2:])
 	case "list":
 		err = runList()
+	case "serve":
+		err = runServe(os.Args[2:])
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 		return
@@ -42,6 +49,28 @@ func main() {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func runServe(args []string) error {
+	fs := flag.NewFlagSet("serve", flag.ExitOnError)
+	addr := fs.String("addr", ":8080", "listen address")
+	org := fs.String("org", os.Getenv("CODESEARCH_ORG"), "organization for the inbox")
+	static := fs.String("static", "", "directory of built frontend assets to serve")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	srv, err := web.NewServer(web.Config{
+		Addr:      *addr,
+		Org:       *org,
+		Token:     os.Getenv("GITHUB_TOKEN"),
+		StaticDir: *static,
+	})
+	if err != nil {
+		return err
+	}
+
+	return srv.ListenAndServe()
 }
 
 func runIndex(args []string) error {
