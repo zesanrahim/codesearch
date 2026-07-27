@@ -15,7 +15,7 @@ build: ## Build the codesearch binary
 	go build -o codesearch .
 
 .PHONY: run
-run: ## Run the TUI
+run: ## Show CLI usage (pass args with: go run . search foo)
 	go run .
 
 .PHONY: test
