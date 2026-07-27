@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, lazy, Suspense } from 'react'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import DiffDemo from './DiffDemo'
 
 const Scene3D = lazy(() => import('./Scene3D'))
@@ -36,12 +37,13 @@ function scrollToId(id, behavior = 'smooth') {
 }
 
 function SectionLink({ to, className, children }) {
+  const navigate = useNavigate()
   const route = ROUTES.find((r) => r.path === to)
 
   const go = (e) => {
     if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return
     e.preventDefault()
-    if (window.location.pathname !== to) window.history.pushState({}, '', to)
+    navigate(to)
     scrollToId(route?.id ?? 'top')
   }
 
@@ -53,56 +55,14 @@ function SectionLink({ to, className, children }) {
 }
 
 function useSectionRoutes() {
+  const location = useLocation()
+
   useEffect(() => {
-    const landing = ROUTES.find((r) => r.path === window.location.pathname)
-    if (landing && landing.id !== 'top') {
-      requestAnimationFrame(() => scrollToId(landing.id, 'auto'))
+    const match = ROUTES.find((r) => r.path === location.pathname)
+    if (match && match.id !== 'top') {
+      requestAnimationFrame(() => scrollToId(match.id, 'auto'))
     }
-
-    const onPop = () => {
-      const match = ROUTES.find((r) => r.path === window.location.pathname)
-      scrollToId(match?.id ?? 'top')
-    }
-    window.addEventListener('popstate', onPop)
-
-    const sections = ROUTES.filter((r) => r.id !== 'top')
-      .map((r) => ({ route: r, el: document.getElementById(r.id) }))
-      .filter((s) => s.el)
-
-    const io = new IntersectionObserver(
-      (entries) => {
-        const visible = entries
-          .filter((e) => e.isIntersecting)
-          .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0]
-
-        const next = visible
-          ? sections.find((s) => s.el === visible.target)?.route.path
-          : window.scrollY < 200
-            ? '/'
-            : null
-
-        if (next && window.location.pathname !== next) {
-          window.history.replaceState({}, '', next)
-        }
-      },
-      { threshold: [0.25, 0.6], rootMargin: '-72px 0px -40% 0px' }
-    )
-
-    sections.forEach((s) => io.observe(s.el))
-
-    const onScroll = () => {
-      if (window.scrollY < 200 && window.location.pathname !== '/') {
-        window.history.replaceState({}, '', '/')
-      }
-    }
-    window.addEventListener('scroll', onScroll, { passive: true })
-
-    return () => {
-      window.removeEventListener('popstate', onPop)
-      window.removeEventListener('scroll', onScroll)
-      io.disconnect()
-    }
-  }, [])
+  }, [location.pathname])
 }
 
 function Brand() {
@@ -226,9 +186,12 @@ export default function App() {
               </p>
 
               <div className="mt-8 flex flex-wrap gap-3">
-                <button className="h-10 px-5 rounded-md bg-cream text-ink text-sm font-medium hover:bg-white hover:-translate-y-px transition-all">
-                  Connect a repository
-                </button>
+                <Link
+                  to="/app"
+                  className="h-10 px-5 rounded-md bg-cream text-ink text-sm font-medium flex items-center hover:bg-white hover:-translate-y-px transition-all"
+                >
+                  Open the inbox
+                </Link>
                 <SectionLink
                   to="/how"
                   className="h-10 px-5 rounded-md border border-line2 text-sm font-medium flex items-center hover:border-faint hover:bg-cream/5 transition-all"
@@ -300,9 +263,12 @@ export default function App() {
               changes what you would have said.
             </p>
             <div className="mt-8 flex justify-center gap-3">
-              <button className="h-10 px-5 rounded-md bg-cream text-ink text-sm font-medium hover:bg-white hover:-translate-y-px transition-all">
-                Connect a repository
-              </button>
+              <Link
+                to="/app"
+                className="h-10 px-5 rounded-md bg-cream text-ink text-sm font-medium flex items-center hover:bg-white hover:-translate-y-px transition-all"
+              >
+                Open the inbox
+              </Link>
               <SectionLink
                 to="/demo"
                 className="h-10 px-5 rounded-md border border-line2 text-sm font-medium flex items-center hover:border-faint hover:bg-cream/5 transition-all"

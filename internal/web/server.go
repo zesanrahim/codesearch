@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"sync"
 	"time"
 
 	"codesearch/internal/diff"
@@ -25,6 +27,21 @@ type Config struct {
 type Server struct {
 	cfg Config
 	gh  *ghapi.Client
+
+	viewerOnce sync.Once
+	viewer     string
+}
+
+func (s *Server) viewerLogin(ctx context.Context) string {
+	s.viewerOnce.Do(func() {
+		user, err := s.gh.CurrentUser(ctx)
+		if err != nil {
+			log.Printf("current user: %v", err)
+			return
+		}
+		s.viewer = user.Login
+	})
+	return s.viewer
 }
 
 func NewServer(cfg Config) (*Server, error) {
@@ -142,8 +159,9 @@ func (s *Server) handleInbox(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"items": items,
-		"rate":  s.gh.Rate(),
+		"items":  items,
+		"viewer": s.viewerLogin(ctx),
+		"rate":   s.gh.Rate(),
 	})
 }
 
