@@ -1,6 +1,10 @@
 .env
 .DS_Store
 
+# Frontend
+node_modules/
+dist/
+
 # Compiled binary
 /codesearch
 
