@@ -1,7 +1,5 @@
 .env
 .DS_Store
-node_modules/
-dist/
 
 # Compiled binary
 /codesearch
