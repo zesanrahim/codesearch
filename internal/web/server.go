@@ -71,6 +71,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/health", s.handleHealth)
 	mux.HandleFunc("GET /api/inbox", s.handleInbox)
 	mux.HandleFunc("GET /api/pr/{owner}/{repo}/{number}", s.handlePullRequest)
+	mux.HandleFunc("GET /api/pr/{owner}/{repo}/{number}/drafts", s.handleGetDrafts)
+	mux.HandleFunc("PUT /api/pr/{owner}/{repo}/{number}/drafts", s.handlePutDraft)
+	mux.HandleFunc("DELETE /api/pr/{owner}/{repo}/{number}/drafts", s.handleDeleteDraft)
+	mux.HandleFunc("PUT /api/pr/{owner}/{repo}/{number}/summary", s.handlePutSummary)
+	mux.HandleFunc("POST /api/pr/{owner}/{repo}/{number}/review", s.handleSubmitReview)
 
 	if s.cfg.StaticDir != "" {
 		mux.Handle("/", spaHandler(s.cfg.StaticDir))
@@ -422,7 +427,7 @@ func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "http://localhost:5173")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)

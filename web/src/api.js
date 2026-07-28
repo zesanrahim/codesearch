@@ -22,6 +22,34 @@ export function fetchPullRequest(owner, repo, number) {
   return json(`/api/pr/${owner}/${repo}/${number}`)
 }
 
+const asJSON = (method, body) => ({
+  method,
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(body),
+})
+
+export function fetchDrafts(owner, repo, number) {
+  return json(`/api/pr/${owner}/${repo}/${number}/drafts`)
+}
+
+export function saveDraft(owner, repo, number, draft) {
+  return json(`/api/pr/${owner}/${repo}/${number}/drafts`, asJSON('PUT', draft))
+}
+
+export function deleteDraft(owner, repo, number, { path, line, side }) {
+  const q = new URLSearchParams({ path, line: String(line), side })
+  return json(`/api/pr/${owner}/${repo}/${number}/drafts?${q}`, {
+    method: 'DELETE',
+  })
+}
+
+export function submitReview(owner, repo, number, { event, summary }) {
+  return json(
+    `/api/pr/${owner}/${repo}/${number}/review`,
+    asJSON('POST', { event, summary })
+  )
+}
+
 export function useAsync(fn, deps) {
   const [state, setState] = useState({ loading: true, data: null, error: null })
 
