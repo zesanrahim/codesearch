@@ -2,17 +2,15 @@ package github
 
 import (
 	"bufio"
-	"codesearch/internal/database"
+	"encoding/base64"
+
 	"codesearch/internal/engine"
 	"codesearch/internal/paths"
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
-	"sort"
 	"strings"
 	"sync"
 )
@@ -46,93 +44,11 @@ func NewRepo(cloneURL string) (*Repo, error) {
 	}, nil
 }
 
-var (
-	repoCache = make(map[string]*Repo)
-	cacheLock sync.RWMutex
-)
-
-func GetRepo(name string) (repo *Repo, err error) {
-
-	cacheLock.RLock()
-	if repo, exists := repoCache[name]; exists {
-		cacheLock.RUnlock()
-		return repo, nil
-	}
-	cacheLock.RUnlock()
-
-	if _, err := database.GetClient(); err != nil {
-		return nil, fmt.Errorf("supabase client unavailable: %w", err)
-	}
-
-	var repoPath, cloneURL string
-
-	// TODO: Add Schema's and get data accorrdingly
-	// sql query once db has schema
-	// err := client.DB("query")
-
-	// if err != nill {
-	// 	return nil
-	// }
-
-	repo = &Repo{
-		Name:     name,
-		RepoPath: repoPath,
-		CloneURL: cloneURL,
-	}
-
-	cacheLock.Lock()
-	repoCache[name] = repo
-	cacheLock.Unlock()
-
-	return repo, nil
-}
-
-func MultiCloneRepos(ctx context.Context, repos []*Repo) error {
-	if len(repos) == 0 {
-		return nil
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	workers := make(chan *Repo, len(repos))
-	var wg sync.WaitGroup
-
-	var (
-		errs      []error
-		errsMutex sync.Mutex
-	)
-
-	for w := 1; w <= 3; w++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for repo := range workers {
-				if ctx.Err() != nil {
-					return
-				}
-				if err := CloneRepo(ctx, repo); err != nil {
-					errsMutex.Lock()
-					errs = append(errs, fmt.Errorf("failed to clone %s: %w", repo.Name, err))
-					errsMutex.Unlock()
-				}
-			}
-		}()
-	}
-
-	for _, repo := range repos {
-		workers <- repo
-	}
-	close(workers)
-	wg.Wait()
-
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	return errors.Join(errs...)
-}
-
 func CloneRepo(ctx context.Context, repo *Repo) error {
+	return CloneRepoAuth(ctx, repo, "")
+}
 
+func CloneRepoAuth(ctx context.Context, repo *Repo, token string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -146,56 +62,32 @@ func CloneRepo(ctx context.Context, repo *Repo) error {
 		return fmt.Errorf("failed to create repo directory: %w", err)
 	}
 
-	cmd := exec.CommandContext(ctx, "git", "clone", repo.CloneURL, repo.RepoPath)
+	args := []string{}
+	if token != "" {
+		auth := base64.StdEncoding.EncodeToString([]byte("x-access-token:" + token))
+		args = append(args, "-c", "http.extraHeader=Authorization: Basic "+auth)
+	}
+	args = append(args, "clone", "--depth", "1", "--single-branch", repo.CloneURL, repo.RepoPath)
+
+	cmd := exec.CommandContext(ctx, "git", args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
+		os.RemoveAll(repo.RepoPath)
 		if ctx.Err() != nil {
 			return fmt.Errorf("clone aborted: %w", ctx.Err())
 		}
-		return fmt.Errorf("git clone failed: %w\nOutput: %s", err, string(output))
+		return fmt.Errorf("git clone failed: %w\nOutput: %s", err, scrub(string(output), token))
 	}
 
 	fmt.Fprintf(os.Stderr, "Successfully cloned repo %s\n", repo.Name)
 	return nil
-
 }
 
-func FetchRepo(repo *Repo) error {
-
-	if _, err := os.Stat(repo.RepoPath); os.IsNotExist(err) {
-		fmt.Fprintf(os.Stderr, "Repo %s does not exists at %s\n", repo.Name, repo.RepoPath)
-		return nil
+func scrub(s, token string) string {
+	if token == "" {
+		return s
 	}
-	cmd := exec.Command("git", "-C", repo.RepoPath, "fetch", "--prune")
-	output, err := cmd.Output()
-	if err != nil {
-		return fmt.Errorf("git fetch failed: %w\nOutput: %s", err, string(output))
-	}
-
-	return nil
-}
-
-//	func checkRepo(repo *Repo) error {
-//		// TODO : add git fsck command if needed
-//		return nil
-//	}
-func DeleteRepo(repo *Repo) error {
-
-	if _, err := os.Stat(repo.RepoPath); os.IsNotExist(err) {
-		return fmt.Errorf("Repo %s does not exists", repo.RepoPath)
-
-	}
-
-	if err := os.RemoveAll(repo.RepoPath); err != nil {
-		return fmt.Errorf("failed to delete repo directory: %w", err)
-	}
-	cacheLock.Lock()
-	delete(repoCache, repo.Name)
-	cacheLock.Unlock()
-
-	fmt.Fprintf(os.Stderr, "Repo has been deleted")
-
-	return nil
+	return strings.ReplaceAll(s, token, "***")
 }
 
 func isBinaryFile(path string) bool {
@@ -210,45 +102,6 @@ func isBinaryFile(path string) bool {
 	}
 
 	return false
-}
-
-func IndexMultiRepo(ctx context.Context, repos []*Repo) (map[string]*engine.Index, error) {
-	results := make(map[string]*engine.Index)
-	taskChan := make(chan *Repo, len(repos))
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-	numWorkers := runtime.NumCPU() * 2
-
-	for i := 0; i < numWorkers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for r := range taskChan {
-				select {
-				case <-ctx.Done():
-					return
-				default:
-					idx, err := IndexRepo(ctx, r)
-					if err != nil {
-						fmt.Fprintf(os.Stderr, "Failed to index repo %s: %v\n", r.Name, err)
-						continue
-					}
-
-					mu.Lock()
-					results[r.Name] = idx
-					mu.Unlock()
-				}
-			}
-		}()
-	}
-
-	for _, repo := range repos {
-		taskChan <- repo
-	}
-	close(taskChan)
-
-	wg.Wait()
-	return results, ctx.Err()
 }
 
 func IndexRepo(ctx context.Context, repo *Repo) (*engine.Index, error) {
@@ -291,10 +144,6 @@ func IndexRepoWithProgress(ctx context.Context, repo *Repo, onProgress func(proc
 		return nil, fmt.Errorf("failed to create temp file: %w", err)
 	}
 	defer file.Close()
-	// The corpus is not deleted: the saved index records its path and re-maps it
-	// on load, so removing it here made every cached index unloadable and forced
-	// a full re-index on each run. One corpus is kept per repository, overwritten
-	// when that repository is re-indexed.
 
 	writer := bufio.NewWriter(file)
 
@@ -564,112 +413,4 @@ func shouldIgnore(path string) bool {
 	}
 
 	return false
-}
-
-func SearchRepoMultiLine(repo *Repo, codeLines []string) ([]engine.SearchResult, error) {
-	var validLines []string
-	for _, line := range codeLines {
-		if strings.TrimSpace(line) != "" {
-			validLines = append(validLines, line)
-		}
-	}
-
-	if len(validLines) == 0 {
-		return nil, fmt.Errorf("no valid lines in query")
-	}
-
-	idx, err := IndexRepo(context.Background(), repo)
-	if err != nil {
-		return nil, err
-	}
-
-	commitHash := idx.CommitHash
-	repoURL := idx.RepoURL
-
-	matchData := idx.SearchMultiple(validLines)
-
-	var results []engine.SearchResult
-	for lineNum, matchedInputIndices := range matchData {
-		if lineNum < 0 || lineNum >= len(idx.LineOffsets) {
-			continue
-		}
-
-		byteOffset := idx.LineOffsets[lineNum]
-		filePath, err := GetFileFromOffset(byteOffset, idx.FileBoundaries)
-		if err != nil {
-			continue
-		}
-
-		var fileStartOffset int
-		for _, boundary := range idx.FileBoundaries {
-			if boundary.FilePath == filePath {
-				fileStartOffset = boundary.StartOffset
-				break
-			}
-		}
-
-		offsetInFile := byteOffset - fileStartOffset
-
-		absPath := filepath.Join(repo.RepoPath, filePath)
-		content, err := os.ReadFile(absPath)
-		if err != nil {
-			continue
-		}
-
-		if offsetInFile > len(content) {
-			offsetInFile = len(content)
-		}
-		if offsetInFile < 0 {
-			offsetInFile = 0
-		}
-
-		fileLine := 1
-		for i := 0; i < offsetInFile; i++ {
-			if content[i] == '\n' {
-				fileLine++
-			}
-		}
-
-		contextStr := extractContext(content, fileLine)
-
-		matchCount := len(matchedInputIndices)
-		consecutiveBonus := engine.CalculateConsecutiveBonus(matchedInputIndices)
-		consecutiveScore := float64(consecutiveBonus) / float64(len(validLines)-1) * 10.0
-		if len(validLines) <= 1 {
-			consecutiveScore = 0
-		}
-
-		result := engine.SearchResult{
-			FilePath:         filePath,
-			Line:             fileLine,
-			Offset:           byteOffset,
-			Context:          contextStr,
-			CommitHash:       commitHash,
-			RepoURL:          repoURL,
-			MatchedLines:     matchCount,
-			TotalInputLines:  len(validLines),
-			ConsecutiveBonus: consecutiveScore,
-		}
-
-		results = append(results, result)
-	}
-
-	sort.Slice(results, func(i, j int) bool {
-		scoreI := (float64(results[i].MatchedLines) / float64(results[i].TotalInputLines)) * 100
-		scoreJ := (float64(results[j].MatchedLines) / float64(results[j].TotalInputLines)) * 100
-
-		scoreI += results[i].ConsecutiveBonus
-		scoreJ += results[j].ConsecutiveBonus
-
-		if scoreI != scoreJ {
-			return scoreI > scoreJ
-		}
-
-		if results[i].FilePath != results[j].FilePath {
-			return results[i].FilePath < results[j].FilePath
-		}
-		return results[i].Line < results[j].Line
-	})
-
-	return results, nil
 }
