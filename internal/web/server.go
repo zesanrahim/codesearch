@@ -258,6 +258,8 @@ type prComment struct {
 	Body      string    `json:"body"`
 	Line      int       `json:"line"`
 	Side      string    `json:"side"`
+	StartLine int       `json:"startLine,omitempty"`
+	StartSide string    `json:"startSide,omitempty"`
 	Author    string    `json:"author"`
 	AvatarURL string    `json:"avatarUrl"`
 	URL       string    `json:"url"`
@@ -358,6 +360,8 @@ func (s *Server) buildPullRequest(ctx context.Context, owner, repo string, numbe
 			Body:      c.Body,
 			Line:      c.Line,
 			Side:      c.Side,
+			StartLine: c.StartLine,
+			StartSide: c.StartSide,
 			Author:    c.User.Login,
 			AvatarURL: c.User.AvatarURL,
 			URL:       c.HTMLURL,

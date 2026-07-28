@@ -13,6 +13,7 @@ import {
   useAsync,
 } from '../api'
 import FileTree from './FileTree'
+import useSelectionRange from '../useSelectionRange'
 
 const KIND_STYLE = {
   add: 'bg-c4/[0.14] border-l-c4',
@@ -30,6 +31,11 @@ function PostedComment({ c, canDelete, onDelete }) {
       <div className="flex items-center gap-2 mb-1.5">
         <img src={c.avatarUrl} alt="" className="w-4 h-4 rounded-full" />
         <span className="font-mono text-[11.5px] text-dim">{c.author}</span>
+        {c.startLine ? (
+          <span className="font-mono text-[10.5px] px-1.5 py-0.5 rounded border border-line2 text-faint">
+            lines {c.startLine}–{c.line}
+          </span>
+        ) : null}
         <div className="ml-auto flex items-center gap-3">
           {canDelete ? (
             <button
@@ -79,7 +85,7 @@ function UnsentDraft({ draft, onResume, onDiscard }) {
   )
 }
 
-function Composer({ initial, onPost, onCancel, onChange }) {
+function Composer({ initial, range, onPost, onCancel, onChange }) {
   const [body, setBody] = useState(initial || '')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
@@ -98,6 +104,11 @@ function Composer({ initial, onPost, onCancel, onChange }) {
 
   return (
     <div className="my-1.5 mx-10 p-3 rounded-md border border-line2 bg-ink1">
+      {range ? (
+        <div className="mb-2 font-mono text-[11px] text-t3">
+          commenting on lines {range.startLine}–{range.line}
+        </div>
+      ) : null}
       <textarea
         autoFocus
         value={body}
@@ -110,7 +121,7 @@ function Composer({ initial, onPost, onCancel, onChange }) {
           if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) post()
         }}
         rows={3}
-        placeholder="Comment on this line…"
+        placeholder={range ? 'Comment on these lines…' : 'Comment on this line…'}
         className="w-full bg-ink border border-line1 rounded p-2 text-[13px] text-cream outline-none focus:border-line2 resize-y"
       />
 
@@ -143,12 +154,15 @@ function Composer({ initial, onPost, onCancel, onChange }) {
   )
 }
 
-function Line({ file, line, posted, draft, composing, viewer, actions }) {
+function Line({ file, line, posted, draft, composing, range, viewer, actions }) {
   const key = anchorKey(file.path, line.side, line.anchor)
 
   return (
     <div>
       <div
+        data-path={file.path}
+        data-side={line.side}
+        data-anchor={line.anchor}
         className={`group flex gap-3 px-4 whitespace-pre border-l-2 font-mono text-[12.5px] leading-[1.75] ${KIND_STYLE[line.kind]}`}
       >
         <span className="w-9 shrink-0 text-right text-faint select-none">
@@ -198,6 +212,7 @@ function Line({ file, line, posted, draft, composing, viewer, actions }) {
       {composing ? (
         <Composer
           initial={draft?.body}
+          range={range}
           onPost={(body) =>
             actions.post({
               path: file.path,
@@ -221,7 +236,7 @@ function Line({ file, line, posted, draft, composing, viewer, actions }) {
   )
 }
 
-function FileBlock({ file, postedByKey, draftsByKey, composerKey, viewer, actions }) {
+function FileBlock({ file, postedByKey, draftsByKey, composerKey, pendingRange, viewer, actions }) {
   const [open, setOpen] = useState(true)
 
   return (
@@ -271,6 +286,11 @@ function FileBlock({ file, postedByKey, draftsByKey, composerKey, viewer, action
                       posted={postedByKey.get(key) || []}
                       draft={draftsByKey.get(key)}
                       composing={composerKey === key}
+                      range={
+                        composerKey === key && pendingRange?.path === file.path
+                          ? pendingRange
+                          : null
+                      }
                       viewer={viewer}
                       actions={actions}
                     />
@@ -506,6 +526,8 @@ export default function Review() {
   const [modalOpen, setModalOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [submitError, setSubmitError] = useState(null)
+  const [pendingRange, setPendingRange] = useState(null)
+  const [selection, clearSelection] = useSelectionRange()
   const autosaveTimer = useRef(null)
 
   const { loading, data, error, reload } = useAsync(
@@ -543,10 +565,21 @@ export default function Review() {
       closeComposer: () => setComposerKey(null),
 
       post: async (comment) => {
+        const range =
+          pendingRange &&
+          pendingRange.path === comment.path &&
+          pendingRange.line === comment.line &&
+          pendingRange.side === comment.side
+            ? pendingRange
+            : null
+
         await createComment(owner, repo, number, {
           ...comment,
+          startLine: range?.startLine,
+          startSide: range?.startSide,
           commitId: headSHA,
         })
+        setPendingRange(null)
         setDrafts((prev) =>
           prev.filter(
             (d) =>
@@ -581,8 +614,16 @@ export default function Review() {
         reload()
       },
     }),
-    [owner, repo, number, headSHA, reload]
+    [owner, repo, number, headSHA, reload, pendingRange]
   )
+
+  const commentOnSelection = useCallback(() => {
+    if (!selection) return
+    setPendingRange(selection)
+    setComposerKey(anchorKey(selection.path, selection.side, selection.line))
+    clearSelection()
+    window.getSelection()?.removeAllRanges()
+  }, [selection, clearSelection])
 
   const onSubmit = useCallback(
     async ({ event, summary }) => {
@@ -681,6 +722,7 @@ export default function Review() {
             postedByKey={postedByKey}
             draftsByKey={draftsByKey}
             composerKey={composerKey}
+            pendingRange={pendingRange}
             viewer={data.viewer}
             actions={actions}
           />
@@ -690,6 +732,21 @@ export default function Review() {
       <aside className="hidden lg:block">
         <ContextPanel indexed={data.indexed} owner={owner} repo={repo} />
       </aside>
+
+      {selection ? (
+        <button
+          onClick={commentOnSelection}
+          style={{
+            position: 'fixed',
+            top: Math.max(8, selection.rect.top - 42),
+            left: selection.rect.left,
+            zIndex: 45,
+          }}
+          className="h-8 px-3 rounded-md bg-cream text-ink text-[12.5px] font-medium shadow-lg shadow-black/50 hover:bg-white"
+        >
+          Comment on {selection.count} lines
+        </button>
+      ) : null}
 
       {modalOpen ? (
         <VerdictModal

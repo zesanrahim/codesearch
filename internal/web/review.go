@@ -25,6 +25,27 @@ func reviewKey(r *http.Request) (review.Key, error) {
 	}, nil
 }
 
+func normalizeRange(startLine int, startSide string, line int, side string) (int, string, int, string) {
+	if side != ghapi.SideLeft && side != ghapi.SideRight {
+		side = ghapi.SideRight
+	}
+	if startLine <= 0 {
+		return 0, "", line, side
+	}
+	if startSide != ghapi.SideLeft && startSide != ghapi.SideRight {
+		startSide = side
+	}
+
+	if startLine > line {
+		startLine, line = line, startLine
+		startSide, side = side, startSide
+	}
+	if startLine == line && startSide == side {
+		return 0, "", line, side
+	}
+	return startLine, startSide, line, side
+}
+
 func (s *Server) invalidatePR(k review.Key) {
 	s.cache.invalidate(fmt.Sprintf("pr:%s/%s/%d", k.Owner, k.Repo, k.Number))
 }
@@ -45,11 +66,13 @@ func (s *Server) handleCreateComment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var payload struct {
-		Path     string `json:"path"`
-		Line     int    `json:"line"`
-		Side     string `json:"side"`
-		Body     string `json:"body"`
-		CommitID string `json:"commitId"`
+		Path      string `json:"path"`
+		Line      int    `json:"line"`
+		Side      string `json:"side"`
+		StartLine int    `json:"startLine"`
+		StartSide string `json:"startSide"`
+		Body      string `json:"body"`
+		CommitID  string `json:"commitId"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid comment payload")
@@ -68,6 +91,9 @@ func (s *Server) handleCreateComment(w http.ResponseWriter, r *http.Request) {
 		payload.Side = ghapi.SideRight
 	}
 
+	payload.StartLine, payload.StartSide, payload.Line, payload.Side = normalizeRange(
+		payload.StartLine, payload.StartSide, payload.Line, payload.Side)
+
 	ctx, cancel := detached()
 	defer cancel()
 
@@ -81,11 +107,13 @@ func (s *Server) handleCreateComment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	created, err := s.gh.CreateReviewComment(ctx, key.Owner, key.Repo, key.Number, ghapi.CommentRequest{
-		Body:     payload.Body,
-		CommitID: commit,
-		Path:     payload.Path,
-		Line:     payload.Line,
-		Side:     payload.Side,
+		Body:      payload.Body,
+		CommitID:  commit,
+		Path:      payload.Path,
+		Line:      payload.Line,
+		Side:      payload.Side,
+		StartLine: payload.StartLine,
+		StartSide: payload.StartSide,
 	})
 	if err != nil {
 		writeUpstreamError(w, err)

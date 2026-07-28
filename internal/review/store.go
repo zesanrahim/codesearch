@@ -17,6 +17,8 @@ type Draft struct {
 	Path      string    `json:"path"`
 	Line      int       `json:"line"`
 	Side      string    `json:"side"`
+	StartLine int       `json:"startLine,omitempty"`
+	StartSide string    `json:"startSide,omitempty"`
 	Body      string    `json:"body"`
 	UpdatedAt time.Time `json:"updatedAt"`
 }
