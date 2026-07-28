@@ -24,8 +24,7 @@ type Draft struct {
 }
 
 type State struct {
-	Summary string  `json:"summary"`
-	Drafts  []Draft `json:"drafts"`
+	Drafts []Draft `json:"drafts"`
 }
 
 type Key struct {
@@ -173,26 +172,6 @@ func Delete(k Key, path string, line int, side string) (State, error) {
 		}
 	}
 	s.Drafts = kept
-
-	if err := store(k, s); err != nil {
-		return State{}, err
-	}
-	return s, nil
-}
-
-func SetSummary(k Key, summary string) (State, error) {
-	if err := k.valid(); err != nil {
-		return State{}, err
-	}
-
-	mu.Lock()
-	defer mu.Unlock()
-
-	s, err := load(k)
-	if err != nil {
-		return State{}, err
-	}
-	s.Summary = summary
 
 	if err := store(k, s); err != nil {
 		return State{}, err
