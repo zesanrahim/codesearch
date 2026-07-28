@@ -56,6 +56,7 @@ func runServe(args []string) error {
 	addr := fs.String("addr", ":8080", "listen address")
 	org := fs.String("org", os.Getenv("CODESEARCH_ORG"), "organization for the inbox")
 	static := fs.String("static", "", "directory of built frontend assets to serve")
+	autoIndex := fs.Bool("auto-index", true, "clone and index a repository the first time one of its pull requests is opened")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -65,6 +66,7 @@ func runServe(args []string) error {
 		Org:       *org,
 		Token:     os.Getenv("GITHUB_TOKEN"),
 		StaticDir: *static,
+		AutoIndex: *autoIndex,
 	})
 	if err != nil {
 		return err

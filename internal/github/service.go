@@ -2,6 +2,8 @@ package github
 
 import (
 	"bufio"
+	"encoding/base64"
+
 	"codesearch/internal/database"
 	"codesearch/internal/engine"
 	"codesearch/internal/paths"
@@ -132,7 +134,10 @@ func MultiCloneRepos(ctx context.Context, repos []*Repo) error {
 }
 
 func CloneRepo(ctx context.Context, repo *Repo) error {
+	return CloneRepoAuth(ctx, repo, "")
+}
 
+func CloneRepoAuth(ctx context.Context, repo *Repo, token string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -146,18 +151,32 @@ func CloneRepo(ctx context.Context, repo *Repo) error {
 		return fmt.Errorf("failed to create repo directory: %w", err)
 	}
 
-	cmd := exec.CommandContext(ctx, "git", "clone", repo.CloneURL, repo.RepoPath)
+	args := []string{}
+	if token != "" {
+		auth := base64.StdEncoding.EncodeToString([]byte("x-access-token:" + token))
+		args = append(args, "-c", "http.extraHeader=Authorization: Basic "+auth)
+	}
+	args = append(args, "clone", "--depth", "1", "--single-branch", repo.CloneURL, repo.RepoPath)
+
+	cmd := exec.CommandContext(ctx, "git", args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
+		os.RemoveAll(repo.RepoPath)
 		if ctx.Err() != nil {
 			return fmt.Errorf("clone aborted: %w", ctx.Err())
 		}
-		return fmt.Errorf("git clone failed: %w\nOutput: %s", err, string(output))
+		return fmt.Errorf("git clone failed: %w\nOutput: %s", err, scrub(string(output), token))
 	}
 
 	fmt.Fprintf(os.Stderr, "Successfully cloned repo %s\n", repo.Name)
 	return nil
+}
 
+func scrub(s, token string) string {
+	if token == "" {
+		return s
+	}
+	return strings.ReplaceAll(s, token, "***")
 }
 
 func FetchRepo(repo *Repo) error {

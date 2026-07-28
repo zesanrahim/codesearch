@@ -5,8 +5,10 @@ import {
   deleteComment,
   deleteDraft,
   fetchDrafts,
+  fetchIndexStatus,
   fetchPullRequest,
   saveDraft,
+  startIndex,
   submitReview,
   useAsync,
 } from '../api'
@@ -366,7 +368,66 @@ function VerdictModal({ onClose, onSubmit, busy, error }) {
   )
 }
 
+const ACTIVE = new Set(['queued', 'cloning', 'indexing'])
+
+const LABEL = {
+  absent: 'not indexed',
+  queued: 'queued',
+  cloning: 'cloning repository…',
+  indexing: 'indexing',
+  ready: 'index ready',
+  failed: 'indexing failed',
+}
+
 function ContextPanel({ indexed, owner, repo }) {
+  const [job, setJob] = useState(indexed ? { status: 'ready' } : null)
+
+  useEffect(() => {
+    let stopped = false
+    let timer
+
+    const tick = async () => {
+      try {
+        const next = await fetchIndexStatus(owner, repo)
+        if (stopped) return
+        setJob(next)
+        if (ACTIVE.has(next.status)) timer = setTimeout(tick, 700)
+      } catch {
+        if (!stopped) setJob({ status: 'absent' })
+      }
+    }
+
+    tick()
+    return () => {
+      stopped = true
+      clearTimeout(timer)
+    }
+  }, [owner, repo])
+
+  const status = job?.status || 'absent'
+  const pct =
+    status === 'indexing' && job.total > 0
+      ? Math.round((job.processed / job.total) * 100)
+      : null
+
+  const dot =
+    status === 'ready'
+      ? 'bg-c4'
+      : status === 'failed'
+        ? 'bg-c1'
+        : ACTIVE.has(status)
+          ? 'bg-c3 animate-pulse'
+          : 'bg-line2'
+
+  const retry = async () => {
+    setJob({ status: 'queued' })
+    try {
+      setJob(await startIndex(owner, repo))
+    } catch {
+      setJob({ status: 'failed', error: 'could not start indexing' })
+    }
+  }
+
   return (
     <div className="sticky top-20 p-4 rounded-lg border border-line1 bg-ink1">
       <div className="font-mono text-[11px] uppercase tracking-[0.16em] text-faint">
@@ -374,23 +435,64 @@ function ContextPanel({ indexed, owner, repo }) {
       </div>
 
       <div className="mt-3 flex items-center gap-2 text-[12.5px]">
+        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${dot}`} />
         <span
-          className={`w-1.5 h-1.5 rounded-full ${indexed ? 'bg-c4' : 'bg-line2'}`}
-        />
-        <span className={indexed ? 'text-t4' : 'text-faint'}>
-          {indexed ? 'index present' : 'not indexed'}
+          className={
+            status === 'ready'
+              ? 'text-t4'
+              : status === 'failed'
+                ? 'text-t1'
+                : ACTIVE.has(status)
+                  ? 'text-t3'
+                  : 'text-faint'
+          }
+        >
+          {LABEL[status] || status}
         </span>
+        {pct !== null ? (
+          <span className="ml-auto font-mono text-[11px] text-faint">
+            {pct}%
+          </span>
+        ) : null}
       </div>
 
-      {!indexed ? (
-        <p className="mt-2 font-mono text-[11.5px] text-faint leading-relaxed break-all">
-          codesearch index https://github.com/{owner}/{repo}
+      {status === 'indexing' && job.total > 0 ? (
+        <>
+          <div className="mt-2.5 h-1 rounded-full bg-ink overflow-hidden">
+            <div
+              className="h-full bg-c3 transition-[width] duration-300"
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+          <p className="mt-1.5 font-mono text-[11px] text-faint">
+            {job.processed.toLocaleString()} / {job.total.toLocaleString()} files
+          </p>
+        </>
+      ) : null}
+
+      {status === 'ready' && job?.files ? (
+        <p className="mt-1.5 font-mono text-[11px] text-faint">
+          {job.files.toLocaleString()} files indexed
         </p>
       ) : null}
 
-      <p className="mt-3 text-[12.5px] text-dim leading-relaxed">
-        Identifier usage lookups are not built yet. Nothing here indexes
-        automatically.
+      {status === 'failed' ? (
+        <p className="mt-2 text-[12px] text-dim break-words">{job.error}</p>
+      ) : null}
+
+      {(status === 'absent' || status === 'failed') ? (
+        <button
+          onClick={retry}
+          className="mt-3 h-7 px-3 rounded border border-line2 text-[12px] text-cream hover:bg-cream/5"
+        >
+          {status === 'failed' ? 'Retry' : 'Index now'}
+        </button>
+      ) : null}
+
+      <p className="mt-3 pt-3 border-t border-line1 text-[12.5px] text-dim leading-relaxed">
+        {status === 'ready'
+          ? 'Identifier usage lookups land next; the index they need is ready.'
+          : 'Identifier usage lookups need this index.'}
       </p>
     </div>
   )

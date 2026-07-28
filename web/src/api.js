@@ -63,6 +63,14 @@ export function submitReview(owner, repo, number, { event, summary }) {
   )
 }
 
+export function fetchIndexStatus(owner, repo) {
+  return json(`/api/index/${owner}/${repo}`)
+}
+
+export function startIndex(owner, repo) {
+  return json(`/api/index/${owner}/${repo}`, { method: 'POST' })
+}
+
 export function useAsync(fn, deps) {
   const [state, setState] = useState({ loading: true, data: null, error: null })
 

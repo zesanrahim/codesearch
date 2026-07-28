@@ -15,6 +15,7 @@ import (
 	"codesearch/internal/diff"
 	"codesearch/internal/ghapi"
 	"codesearch/internal/github"
+	"codesearch/internal/indexer"
 )
 
 type Config struct {
@@ -22,12 +23,14 @@ type Config struct {
 	Org       string
 	Token     string
 	StaticDir string
+	AutoIndex bool
 }
 
 type Server struct {
-	cfg   Config
-	gh    *ghapi.Client
-	cache *cache
+	cfg     Config
+	gh      *ghapi.Client
+	cache   *cache
+	indexer *indexer.Manager
 
 	viewerOnce sync.Once
 	viewer     string
@@ -62,7 +65,19 @@ func NewServer(cfg Config) (*Server, error) {
 	if cfg.Addr == "" {
 		cfg.Addr = ":8080"
 	}
-	return &Server{cfg: cfg, gh: ghapi.New(cfg.Token), cache: newCache()}, nil
+	s := &Server{
+		cfg:     cfg,
+		gh:      ghapi.New(cfg.Token),
+		cache:   newCache(),
+		indexer: indexer.New(cfg.Token, 1),
+	}
+
+	s.indexer.OnReady(func(owner, repo string) {
+		s.cache.invalidatePrefix(fmt.Sprintf("pr:%s/%s/", owner, repo))
+		s.cache.invalidatePrefix("inbox:")
+	})
+
+	return s, nil
 }
 
 func (s *Server) Handler() http.Handler {
@@ -77,6 +92,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/pr/{owner}/{repo}/{number}/comments", s.handleCreateComment)
 	mux.HandleFunc("DELETE /api/pr/{owner}/{repo}/{number}/comments/{id}", s.handleDeleteComment)
 	mux.HandleFunc("POST /api/pr/{owner}/{repo}/{number}/review", s.handleSubmitReview)
+	mux.HandleFunc("GET /api/index/{owner}/{repo}", s.handleIndexStatus)
+	mux.HandleFunc("POST /api/index/{owner}/{repo}", s.handleIndexEnsure)
 
 	if s.cfg.StaticDir != "" {
 		mux.Handle("/", spaHandler(s.cfg.StaticDir))
@@ -268,7 +285,21 @@ func (s *Server) handlePullRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if s.cfg.AutoIndex {
+		s.indexer.Ensure(owner, repo)
+	}
+
 	writeJSON(w, http.StatusOK, payload)
+}
+
+func (s *Server) handleIndexStatus(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK,
+		s.indexer.Status(r.PathValue("owner"), r.PathValue("repo")))
+}
+
+func (s *Server) handleIndexEnsure(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK,
+		s.indexer.Ensure(r.PathValue("owner"), r.PathValue("repo")))
 }
 
 func (s *Server) buildPullRequest(ctx context.Context, owner, repo string, number int) (any, error) {

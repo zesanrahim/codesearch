@@ -1,6 +1,7 @@
 package web
 
 import (
+	"strings"
 	"sync"
 	"time"
 )
@@ -74,4 +75,15 @@ func (c *cache) invalidate(key string) {
 	c.mu.Lock()
 	delete(c.data, key)
 	c.mu.Unlock()
+}
+
+func (c *cache) invalidatePrefix(prefix string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for key := range c.data {
+		if strings.HasPrefix(key, prefix) {
+			delete(c.data, key)
+		}
+	}
 }
