@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect } from 'react'
 
 function lineElement(node) {
   if (!node) return null
@@ -45,8 +45,6 @@ function resolve(selection) {
   const endLine = Math.max(...spanned)
   if (startLine === endLine) return null
 
-  const rect = selection.getRangeAt(0).getBoundingClientRect()
-
   return {
     path,
     side,
@@ -54,27 +52,17 @@ function resolve(selection) {
     startLine,
     line: endLine,
     count: endLine - startLine + 1,
-    rect: { top: rect.top, left: rect.left, bottom: rect.bottom },
   }
 }
 
-export default function useSelectionRange() {
-  const [range, setRange] = useState(null)
-
+export default function useSelectionRange(onRange) {
   useEffect(() => {
-    const update = () => setRange(resolve(document.getSelection()))
-
-    const onKey = (e) => {
-      if (e.key === 'Escape') setRange(null)
+    const update = () => {
+      const range = resolve(document.getSelection())
+      if (range) onRange(range)
     }
 
     document.addEventListener('mouseup', update)
-    document.addEventListener('keyup', onKey)
-    return () => {
-      document.removeEventListener('mouseup', update)
-      document.removeEventListener('keyup', onKey)
-    }
-  }, [])
-
-  return [range, () => setRange(null)]
+    return () => document.removeEventListener('mouseup', update)
+  }, [onRange])
 }

@@ -23,6 +23,11 @@ const KIND_STYLE = {
 
 const SIGN = { add: '+', del: '−', ctx: ' ' }
 
+function lineClass(kind, inRange) {
+  if (inRange) return 'bg-c5/25 border-l-t5'
+  return KIND_STYLE[kind]
+}
+
 const anchorKey = (path, side, line) => `${path}|${side}:${line}`
 
 function PostedComment({ c, canDelete, onDelete }) {
@@ -103,10 +108,19 @@ function Composer({ initial, range, onPost, onCancel, onChange }) {
   }
 
   return (
-    <div className="my-1.5 mx-10 p-3 rounded-md border border-line2 bg-ink1">
+    <div
+      className={`my-1.5 mx-10 p-3 rounded-md bg-ink1 border ${
+        range ? 'border-t5/60 border-l-2 border-l-t5' : 'border-line2'
+      }`}
+    >
       {range ? (
-        <div className="mb-2 font-mono text-[11px] text-t3">
-          commenting on lines {range.startLine}–{range.line}
+        <div className="mb-2.5 flex items-center gap-2">
+          <span className="px-1.5 py-0.5 rounded bg-c5/25 font-mono text-[10.5px] tracking-wide text-t5">
+            {range.count} lines
+          </span>
+          <span className="font-mono text-[11px] text-faint">
+            {range.startLine}–{range.line} · {range.side.toLowerCase()}
+          </span>
         </div>
       ) : null}
       <textarea
@@ -154,7 +168,7 @@ function Composer({ initial, range, onPost, onCancel, onChange }) {
   )
 }
 
-function Line({ file, line, posted, draft, composing, range, viewer, actions }) {
+function Line({ file, line, posted, draft, composing, range, inRange, viewer, actions }) {
   const key = anchorKey(file.path, line.side, line.anchor)
 
   return (
@@ -163,7 +177,7 @@ function Line({ file, line, posted, draft, composing, range, viewer, actions }) 
         data-path={file.path}
         data-side={line.side}
         data-anchor={line.anchor}
-        className={`group flex gap-3 px-4 whitespace-pre border-l-2 font-mono text-[12.5px] leading-[1.75] ${KIND_STYLE[line.kind]}`}
+        className={`group flex gap-3 px-4 whitespace-pre border-l-2 font-mono text-[12.5px] leading-[1.75] ${lineClass(line.kind, inRange)}`}
       >
         <span className="w-9 shrink-0 text-right text-faint select-none">
           {line.oldLine || ''}
@@ -278,6 +292,13 @@ function FileBlock({ file, postedByKey, draftsByKey, composerKey, pendingRange, 
                 </div>
                 {h.lines.map((l, li) => {
                   const key = anchorKey(file.path, l.side, l.anchor)
+                  const inRange = Boolean(
+                    pendingRange &&
+                      pendingRange.path === file.path &&
+                      pendingRange.side === l.side &&
+                      l.anchor >= pendingRange.startLine &&
+                      l.anchor <= pendingRange.line
+                  )
                   return (
                     <Line
                       key={li}
@@ -286,6 +307,7 @@ function FileBlock({ file, postedByKey, draftsByKey, composerKey, pendingRange, 
                       posted={postedByKey.get(key) || []}
                       draft={draftsByKey.get(key)}
                       composing={composerKey === key}
+                      inRange={inRange}
                       range={
                         composerKey === key && pendingRange?.path === file.path
                           ? pendingRange
@@ -527,7 +549,6 @@ export default function Review() {
   const [busy, setBusy] = useState(false)
   const [submitError, setSubmitError] = useState(null)
   const [pendingRange, setPendingRange] = useState(null)
-  const [selection, clearSelection] = useSelectionRange()
   const autosaveTimer = useRef(null)
 
   const { loading, data, error, reload } = useAsync(
@@ -562,7 +583,10 @@ export default function Review() {
   const actions = useMemo(
     () => ({
       openComposer: (key) => setComposerKey(key),
-      closeComposer: () => setComposerKey(null),
+      closeComposer: () => {
+        setComposerKey(null)
+        setPendingRange(null)
+      },
 
       post: async (comment) => {
         const range =
@@ -617,13 +641,22 @@ export default function Review() {
     [owner, repo, number, headSHA, reload, pendingRange]
   )
 
-  const commentOnSelection = useCallback(() => {
-    if (!selection) return
-    setPendingRange(selection)
-    setComposerKey(anchorKey(selection.path, selection.side, selection.line))
-    clearSelection()
-    window.getSelection()?.removeAllRanges()
-  }, [selection, clearSelection])
+  const onRange = useCallback((range) => {
+    setPendingRange(range)
+    setComposerKey(anchorKey(range.path, range.side, range.line))
+  }, [])
+
+  useSelectionRange(onRange)
+
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key !== 'Escape') return
+      setPendingRange(null)
+      setComposerKey(null)
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [])
 
   const onSubmit = useCallback(
     async ({ event, summary }) => {
@@ -732,21 +765,6 @@ export default function Review() {
       <aside className="hidden lg:block">
         <ContextPanel indexed={data.indexed} owner={owner} repo={repo} />
       </aside>
-
-      {selection ? (
-        <button
-          onClick={commentOnSelection}
-          style={{
-            position: 'fixed',
-            top: Math.max(8, selection.rect.top - 42),
-            left: selection.rect.left,
-            zIndex: 45,
-          }}
-          className="h-8 px-3 rounded-md bg-cream text-ink text-[12.5px] font-medium shadow-lg shadow-black/50 hover:bg-white"
-        >
-          Comment on {selection.count} lines
-        </button>
-      ) : null}
 
       {modalOpen ? (
         <VerdictModal
