@@ -74,7 +74,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/pr/{owner}/{repo}/{number}/drafts", s.handleGetDrafts)
 	mux.HandleFunc("PUT /api/pr/{owner}/{repo}/{number}/drafts", s.handlePutDraft)
 	mux.HandleFunc("DELETE /api/pr/{owner}/{repo}/{number}/drafts", s.handleDeleteDraft)
-	mux.HandleFunc("PUT /api/pr/{owner}/{repo}/{number}/summary", s.handlePutSummary)
+	mux.HandleFunc("POST /api/pr/{owner}/{repo}/{number}/comments", s.handleCreateComment)
+	mux.HandleFunc("DELETE /api/pr/{owner}/{repo}/{number}/comments/{id}", s.handleDeleteComment)
 	mux.HandleFunc("POST /api/pr/{owner}/{repo}/{number}/review", s.handleSubmitReview)
 
 	if s.cfg.StaticDir != "" {
@@ -353,6 +354,8 @@ func (s *Server) buildPullRequest(ctx context.Context, owner, repo string, numbe
 		"createdAt":    pr.CreatedAt,
 		"files":        outFiles,
 		"comments":     outComments,
+		"viewer":       s.viewerLogin(ctx),
+		"indexed":      indexedRepos()[owner+"/"+repo],
 		"rate":         s.gh.Rate(),
 	}, nil
 }

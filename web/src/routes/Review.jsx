@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import {
+  createComment,
+  deleteComment,
   deleteDraft,
   fetchDrafts,
   fetchPullRequest,
@@ -20,58 +22,76 @@ const SIGN = { add: '+', del: '−', ctx: ' ' }
 
 const anchorKey = (path, side, line) => `${path}|${side}:${line}`
 
-function PostedComment({ c }) {
+function PostedComment({ c, canDelete, onDelete }) {
   return (
     <div className="my-1.5 mx-10 p-3 rounded-md border border-line1 bg-ink1">
       <div className="flex items-center gap-2 mb-1.5">
         <img src={c.avatarUrl} alt="" className="w-4 h-4 rounded-full" />
         <span className="font-mono text-[11.5px] text-dim">{c.author}</span>
-        <a
-          href={c.url}
-          target="_blank"
-          rel="noreferrer"
-          className="ml-auto font-mono text-[11px] text-faint hover:text-cream"
-        >
-          github ↗
-        </a>
+        <div className="ml-auto flex items-center gap-3">
+          {canDelete ? (
+            <button
+              onClick={onDelete}
+              className="font-mono text-[11px] text-faint hover:text-t1"
+            >
+              delete
+            </button>
+          ) : null}
+          <a
+            href={c.url}
+            target="_blank"
+            rel="noreferrer"
+            className="font-mono text-[11px] text-faint hover:text-cream"
+          >
+            github ↗
+          </a>
+        </div>
       </div>
       <div className="text-[13px] text-cream whitespace-pre-wrap">{c.body}</div>
     </div>
   )
 }
 
-function DraftComment({ draft, onEdit, onDelete }) {
+function UnsentDraft({ draft, onResume, onDiscard }) {
   return (
-    <div className="my-1.5 mx-10 p-3 rounded-md border border-c3/40 bg-c3/[0.08]">
-      <div className="flex items-center gap-2 mb-1.5">
-        <span className="font-mono text-[10.5px] uppercase tracking-wider text-t3">
-          pending
-        </span>
-        <button
-          onClick={onEdit}
-          className="ml-auto font-mono text-[11px] text-faint hover:text-cream"
-        >
-          edit
-        </button>
-        <button
-          onClick={onDelete}
-          className="font-mono text-[11px] text-faint hover:text-t1"
-        >
-          discard
-        </button>
-      </div>
-      <div className="text-[13px] text-cream whitespace-pre-wrap">
+    <div className="my-1.5 mx-10 px-3 py-2 rounded-md border border-dashed border-c3/50 bg-c3/[0.06] flex items-center gap-3">
+      <span className="font-mono text-[10.5px] uppercase tracking-wider text-t3">
+        unsent
+      </span>
+      <span className="min-w-0 flex-1 truncate text-[12.5px] text-dim">
         {draft.body}
-      </div>
+      </span>
+      <button
+        onClick={onResume}
+        className="font-mono text-[11px] text-faint hover:text-cream"
+      >
+        resume
+      </button>
+      <button
+        onClick={onDiscard}
+        className="font-mono text-[11px] text-faint hover:text-t1"
+      >
+        discard
+      </button>
     </div>
   )
 }
 
-function Composer({ initial, onSave, onCancel }) {
+function Composer({ initial, onPost, onCancel, onChange }) {
   const [body, setBody] = useState(initial || '')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState(null)
 
-  const submit = () => {
-    if (body.trim()) onSave(body)
+  const post = async () => {
+    if (!body.trim() || busy) return
+    setBusy(true)
+    setError(null)
+    try {
+      await onPost(body)
+    } catch (e) {
+      setError(e.message)
+      setBusy(false)
+    }
   }
 
   return (
@@ -79,36 +99,49 @@ function Composer({ initial, onSave, onCancel }) {
       <textarea
         autoFocus
         value={body}
-        onChange={(e) => setBody(e.target.value)}
+        onChange={(e) => {
+          setBody(e.target.value)
+          onChange?.(e.target.value)
+        }}
         onKeyDown={(e) => {
           if (e.key === 'Escape') onCancel()
-          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) submit()
+          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) post()
         }}
         rows={3}
-        placeholder="Leave a comment…"
+        placeholder="Comment on this line…"
         className="w-full bg-ink border border-line1 rounded p-2 text-[13px] text-cream outline-none focus:border-line2 resize-y"
       />
+
+      {error ? (
+        <div className="mt-2 p-2 rounded border border-c1/40 bg-c1/10 text-[12px] text-dim">
+          {error}
+        </div>
+      ) : null}
+
       <div className="mt-2 flex items-center gap-2">
         <button
-          onClick={submit}
-          disabled={!body.trim()}
+          onClick={post}
+          disabled={!body.trim() || busy}
           className="h-7 px-3 rounded bg-cream text-ink text-[12px] font-medium disabled:opacity-40"
         >
-          Add comment
+          {busy ? 'Posting…' : 'Comment'}
         </button>
         <button
           onClick={onCancel}
+          disabled={busy}
           className="h-7 px-3 rounded border border-line2 text-[12px] text-dim hover:text-cream"
         >
           Cancel
         </button>
-        <span className="ml-auto font-mono text-[10.5px] text-faint">⌘↵</span>
+        <span className="ml-auto font-mono text-[10.5px] text-faint">
+          ⌘↵ · posts to GitHub
+        </span>
       </div>
     </div>
   )
 }
 
-function Line({ file, line, posted, draft, composing, actions }) {
+function Line({ file, line, posted, draft, composing, viewer, actions }) {
   const key = anchorKey(file.path, line.side, line.anchor)
 
   return (
@@ -144,22 +177,27 @@ function Line({ file, line, posted, draft, composing, actions }) {
       </div>
 
       {posted.map((c) => (
-        <PostedComment key={c.id} c={c} />
+        <PostedComment
+          key={c.id}
+          c={c}
+          canDelete={c.author === viewer}
+          onDelete={() => actions.removeComment(c.id)}
+        />
       ))}
 
       {draft && !composing ? (
-        <DraftComment
+        <UnsentDraft
           draft={draft}
-          onEdit={() => actions.openComposer(key)}
-          onDelete={() => actions.remove(draft)}
+          onResume={() => actions.openComposer(key)}
+          onDiscard={() => actions.discardDraft(draft)}
         />
       ) : null}
 
       {composing ? (
         <Composer
           initial={draft?.body}
-          onSave={(body) =>
-            actions.save({
+          onPost={(body) =>
+            actions.post({
               path: file.path,
               line: line.anchor,
               side: line.side,
@@ -167,13 +205,21 @@ function Line({ file, line, posted, draft, composing, actions }) {
             })
           }
           onCancel={actions.closeComposer}
+          onChange={(body) =>
+            actions.autosave({
+              path: file.path,
+              line: line.anchor,
+              side: line.side,
+              body,
+            })
+          }
         />
       ) : null}
     </div>
   )
 }
 
-function FileBlock({ file, postedByKey, draftsByKey, composerKey, actions }) {
+function FileBlock({ file, postedByKey, draftsByKey, composerKey, viewer, actions }) {
   const [open, setOpen] = useState(true)
 
   return (
@@ -223,6 +269,7 @@ function FileBlock({ file, postedByKey, draftsByKey, composerKey, actions }) {
                       posted={postedByKey.get(key) || []}
                       draft={draftsByKey.get(key)}
                       composing={composerKey === key}
+                      viewer={viewer}
                       actions={actions}
                     />
                   )
@@ -236,23 +283,24 @@ function FileBlock({ file, postedByKey, draftsByKey, composerKey, actions }) {
   )
 }
 
-function SubmitModal({ drafts, onClose, onSubmit, busy, error }) {
-  const [event, setEvent] = useState('COMMENT')
+function VerdictModal({ onClose, onSubmit, busy, error }) {
+  const [event, setEvent] = useState('APPROVE')
   const [summary, setSummary] = useState('')
 
   const options = [
-    ['COMMENT', 'Comment', 'Leave feedback without a verdict.'],
-    ['APPROVE', 'Approve', 'Submit feedback and approve merging.'],
-    ['REQUEST_CHANGES', 'Request changes', 'Feedback that must be addressed.'],
+    ['APPROVE', 'Approve', 'Approve merging this pull request.'],
+    ['REQUEST_CHANGES', 'Request changes', 'Block until feedback is addressed.'],
+    ['COMMENT', 'Comment', 'Leave a summary without a verdict.'],
   ]
+
+  const needsSummary = event === 'COMMENT' && !summary.trim()
 
   return (
     <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-6">
       <div className="w-full max-w-lg rounded-xl border border-line1 bg-ink1 p-5">
-        <h2 className="text-lg font-semibold">Submit review</h2>
+        <h2 className="text-lg font-semibold">Finish review</h2>
         <p className="mt-1 text-[13px] text-dim">
-          {drafts.length} comment{drafts.length === 1 ? '' : 's'} will be posted
-          to GitHub.
+          Inline comments are already posted. This records your verdict.
         </p>
 
         <div className="mt-4 space-y-1.5">
@@ -267,7 +315,7 @@ function SubmitModal({ drafts, onClose, onSubmit, busy, error }) {
             >
               <input
                 type="radio"
-                name="event"
+                name="verdict"
                 value={value}
                 checked={event === value}
                 onChange={() => setEvent(value)}
@@ -285,7 +333,9 @@ function SubmitModal({ drafts, onClose, onSubmit, busy, error }) {
           value={summary}
           onChange={(e) => setSummary(e.target.value)}
           rows={3}
-          placeholder="Summary (optional)"
+          placeholder={
+            event === 'COMMENT' ? 'Summary (required)' : 'Summary (optional)'
+          }
           className="mt-4 w-full bg-ink border border-line1 rounded p-2 text-[13px] text-cream outline-none focus:border-line2 resize-y"
         />
 
@@ -298,7 +348,7 @@ function SubmitModal({ drafts, onClose, onSubmit, busy, error }) {
         <div className="mt-4 flex gap-2">
           <button
             onClick={() => onSubmit({ event, summary })}
-            disabled={busy}
+            disabled={busy || needsSummary}
             className="h-9 px-4 rounded-md bg-cream text-ink text-[13px] font-medium disabled:opacity-50"
           >
             {busy ? 'Submitting…' : 'Submit'}
@@ -316,6 +366,36 @@ function SubmitModal({ drafts, onClose, onSubmit, busy, error }) {
   )
 }
 
+function ContextPanel({ indexed, owner, repo }) {
+  return (
+    <div className="sticky top-20 p-4 rounded-lg border border-line1 bg-ink1">
+      <div className="font-mono text-[11px] uppercase tracking-[0.16em] text-faint">
+        Context
+      </div>
+
+      <div className="mt-3 flex items-center gap-2 text-[12.5px]">
+        <span
+          className={`w-1.5 h-1.5 rounded-full ${indexed ? 'bg-c4' : 'bg-line2'}`}
+        />
+        <span className={indexed ? 'text-t4' : 'text-faint'}>
+          {indexed ? 'index present' : 'not indexed'}
+        </span>
+      </div>
+
+      {!indexed ? (
+        <p className="mt-2 font-mono text-[11.5px] text-faint leading-relaxed break-all">
+          codesearch index https://github.com/{owner}/{repo}
+        </p>
+      ) : null}
+
+      <p className="mt-3 text-[12.5px] text-dim leading-relaxed">
+        Identifier usage lookups are not built yet. Nothing here indexes
+        automatically.
+      </p>
+    </div>
+  )
+}
+
 export default function Review() {
   const { owner, repo, number } = useParams()
   const [activeFile, setActiveFile] = useState(null)
@@ -324,6 +404,7 @@ export default function Review() {
   const [modalOpen, setModalOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [submitError, setSubmitError] = useState(null)
+  const autosaveTimer = useRef(null)
 
   const { loading, data, error, reload } = useAsync(
     () => fetchPullRequest(owner, repo, number),
@@ -352,21 +433,53 @@ export default function Review() {
     return map
   }, [drafts])
 
+  const headSHA = data?.head?.sha
+
   const actions = useMemo(
     () => ({
       openComposer: (key) => setComposerKey(key),
       closeComposer: () => setComposerKey(null),
-      save: async (draft) => {
-        const state = await saveDraft(owner, repo, number, draft)
-        setDrafts(state.drafts || [])
+
+      post: async (comment) => {
+        await createComment(owner, repo, number, {
+          ...comment,
+          commitId: headSHA,
+        })
+        setDrafts((prev) =>
+          prev.filter(
+            (d) =>
+              !(
+                d.path === comment.path &&
+                d.line === comment.line &&
+                d.side === comment.side
+              )
+          )
+        )
         setComposerKey(null)
+        reload()
       },
-      remove: async (draft) => {
-        const state = await deleteDraft(owner, repo, number, draft)
-        setDrafts(state.drafts || [])
+
+      autosave: (draft) => {
+        clearTimeout(autosaveTimer.current)
+        if (!draft.body.trim()) return
+        autosaveTimer.current = setTimeout(() => {
+          saveDraft(owner, repo, number, draft)
+            .then((s) => setDrafts(s.drafts || []))
+            .catch(() => {})
+        }, 700)
+      },
+
+      discardDraft: async (draft) => {
+        const s = await deleteDraft(owner, repo, number, draft)
+        setDrafts(s.drafts || [])
+      },
+
+      removeComment: async (id) => {
+        await deleteComment(owner, repo, number, id)
+        reload()
       },
     }),
-    [owner, repo, number]
+    [owner, repo, number, headSHA, reload]
   )
 
   const onSubmit = useCallback(
@@ -375,7 +488,6 @@ export default function Review() {
       setSubmitError(null)
       try {
         await submitReview(owner, repo, number, { event, summary })
-        setDrafts([])
         setModalOpen(false)
         reload()
       } catch (e) {
@@ -402,100 +514,83 @@ export default function Review() {
   }
 
   return (
-    <div className="pb-20">
-      <div className="grid grid-cols-1 lg:grid-cols-[230px_minmax(0,1fr)_290px] gap-6 py-6 px-5">
-        <aside className="hidden lg:block">
-          <div className="sticky top-20">
-            <div className="font-mono text-[11px] uppercase tracking-[0.16em] text-faint mb-2 px-1.5">
-              {data.files.length} files
-            </div>
-            <nav className="max-h-[75vh] overflow-y-auto pr-1">
-              <FileTree
-                files={data.files}
-                active={activeFile}
-                onSelect={setActiveFile}
-              />
-            </nav>
+    <div className="grid grid-cols-1 lg:grid-cols-[230px_minmax(0,1fr)_290px] gap-6 py-6 px-5">
+      <aside className="hidden lg:block">
+        <div className="sticky top-20">
+          <div className="font-mono text-[11px] uppercase tracking-[0.16em] text-faint mb-2 px-1.5">
+            {data.files.length} files
           </div>
-        </aside>
+          <nav className="max-h-[75vh] overflow-y-auto pr-1">
+            <FileTree
+              files={data.files}
+              active={activeFile}
+              onSelect={setActiveFile}
+            />
+          </nav>
+        </div>
+      </aside>
 
-        <main className="min-w-0">
-          <header className="mb-6">
-            <Link
-              to={`/app/${owner}/${repo}`}
-              className="font-mono text-[12px] text-faint hover:text-cream"
-            >
-              {owner}/{repo}
-            </Link>
-            <h1 className="mt-1 text-2xl font-semibold">
-              {data.title}{' '}
-              <span className="text-faint font-normal">#{data.number}</span>
-            </h1>
-            <div className="mt-2 flex items-center gap-3 font-mono text-[12px] text-faint">
-              <span>{data.author}</span>
-              <span className="text-line2">·</span>
-              <span className="text-t4">+{data.additions}</span>
-              <span className="text-t1">−{data.deletions}</span>
-              <span className="text-line2">·</span>
-              <span>
-                {data.base.ref} ← {data.head.ref}
-              </span>
+      <main className="min-w-0">
+        <header className="mb-6">
+          <Link
+            to={`/app/${owner}/${repo}`}
+            className="font-mono text-[12px] text-faint hover:text-cream"
+          >
+            {owner}/{repo}
+          </Link>
+          <h1 className="mt-1 text-2xl font-semibold">
+            {data.title}{' '}
+            <span className="text-faint font-normal">#{data.number}</span>
+          </h1>
+
+          <div className="mt-3 flex items-center gap-3 font-mono text-[12px] text-faint">
+            <span>{data.author}</span>
+            <span className="text-line2">·</span>
+            <span className="text-t4">+{data.additions}</span>
+            <span className="text-t1">−{data.deletions}</span>
+            <span className="text-line2">·</span>
+            <span>
+              {data.base.ref} ← {data.head.ref}
+            </span>
+
+            <div className="ml-auto flex items-center gap-3">
               <a
                 href={data.url}
                 target="_blank"
                 rel="noreferrer"
-                className="ml-auto hover:text-cream"
+                className="hover:text-cream"
               >
                 github ↗
               </a>
+              <button
+                onClick={() => setModalOpen(true)}
+                className="h-8 px-3 rounded-md border border-line2 text-[12.5px] font-sans text-cream hover:bg-cream/5"
+              >
+                Finish review
+              </button>
             </div>
-          </header>
-
-          {data.files.map((f) => (
-            <FileBlock
-              key={f.path}
-              file={f}
-              postedByKey={postedByKey}
-              draftsByKey={draftsByKey}
-              composerKey={composerKey}
-              actions={actions}
-            />
-          ))}
-        </main>
-
-        <aside className="hidden lg:block">
-          <div className="sticky top-20 p-4 rounded-lg border border-line1 bg-ink1">
-            <div className="font-mono text-[11px] uppercase tracking-[0.16em] text-faint">
-              Context
-            </div>
-            <p className="mt-2 text-[13px] text-dim leading-relaxed">
-              Usage lookups arrive once this repository is indexed. Hovering an
-              identifier will show everywhere else it appears.
-            </p>
           </div>
-        </aside>
-      </div>
+        </header>
 
-      {drafts.length > 0 ? (
-        <div className="fixed bottom-0 inset-x-0 z-40 border-t border-line1 bg-ink/95 backdrop-blur-xl">
-          <div className="mx-auto max-w-[1400px] px-5 h-14 flex items-center gap-4">
-            <span className="text-[13px] text-dim">
-              <b className="text-cream font-semibold">{drafts.length}</b> comment
-              {drafts.length === 1 ? '' : 's'} pending
-            </span>
-            <button
-              onClick={() => setModalOpen(true)}
-              className="ml-auto h-9 px-4 rounded-md bg-cream text-ink text-[13px] font-medium hover:bg-white"
-            >
-              Submit review
-            </button>
-          </div>
-        </div>
-      ) : null}
+        {data.files.map((f) => (
+          <FileBlock
+            key={f.path}
+            file={f}
+            postedByKey={postedByKey}
+            draftsByKey={draftsByKey}
+            composerKey={composerKey}
+            viewer={data.viewer}
+            actions={actions}
+          />
+        ))}
+      </main>
+
+      <aside className="hidden lg:block">
+        <ContextPanel indexed={data.indexed} owner={owner} repo={repo} />
+      </aside>
 
       {modalOpen ? (
-        <SubmitModal
-          drafts={drafts}
+        <VerdictModal
           busy={busy}
           error={submitError}
           onClose={() => setModalOpen(false)}

@@ -43,6 +43,19 @@ export function deleteDraft(owner, repo, number, { path, line, side }) {
   })
 }
 
+export function createComment(owner, repo, number, comment) {
+  return json(
+    `/api/pr/${owner}/${repo}/${number}/comments`,
+    asJSON('POST', comment)
+  )
+}
+
+export function deleteComment(owner, repo, number, id) {
+  return json(`/api/pr/${owner}/${repo}/${number}/comments/${id}`, {
+    method: 'DELETE',
+  })
+}
+
 export function submitReview(owner, repo, number, { event, summary }) {
   return json(
     `/api/pr/${owner}/${repo}/${number}/review`,

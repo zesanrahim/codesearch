@@ -122,6 +122,16 @@ type DraftComment struct {
 	StartSide string `json:"start_side,omitempty"`
 }
 
+type CommentRequest struct {
+	Body      string `json:"body"`
+	CommitID  string `json:"commit_id"`
+	Path      string `json:"path"`
+	Line      int    `json:"line"`
+	Side      string `json:"side,omitempty"`
+	StartLine int    `json:"start_line,omitempty"`
+	StartSide string `json:"start_side,omitempty"`
+}
+
 type ReviewRequest struct {
 	CommitID string         `json:"commit_id,omitempty"`
 	Body     string         `json:"body,omitempty"`

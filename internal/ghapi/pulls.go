@@ -66,6 +66,19 @@ func (c *Client) IssueComments(ctx context.Context, owner, repo string, number i
 	return getPaged[IssueComment](ctx, c, path)
 }
 
+func (c *Client) CreateReviewComment(ctx context.Context, owner, repo string, number int, req CommentRequest) (*ReviewComment, error) {
+	var created ReviewComment
+	path := fmt.Sprintf("/repos/%s/%s/pulls/%d/comments", owner, repo, number)
+	if err := c.post(ctx, path, req, &created); err != nil {
+		return nil, err
+	}
+	return &created, nil
+}
+
+func (c *Client) DeleteReviewComment(ctx context.Context, owner, repo string, id int64) error {
+	return c.del(ctx, fmt.Sprintf("/repos/%s/%s/pulls/comments/%d", owner, repo, id))
+}
+
 func (c *Client) SubmitReview(ctx context.Context, owner, repo string, number int, req ReviewRequest) (*Review, error) {
 	var review Review
 	path := fmt.Sprintf("/repos/%s/%s/pulls/%d/reviews", owner, repo, number)

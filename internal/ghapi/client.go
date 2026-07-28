@@ -200,6 +200,30 @@ func (c *Client) post(ctx context.Context, path string, in, out any) error {
 	return json.Unmarshal(body, out)
 }
 
+func (c *Client) del(ctx context.Context, path string) error {
+	req, err := c.newRequest(ctx, http.MethodDelete, path, nil)
+	if err != nil {
+		return err
+	}
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	c.recordRate(resp)
+
+	if resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusOK {
+		return nil
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	return apiError(resp, body)
+}
+
 func getPaged[T any](ctx context.Context, c *Client, path string) ([]T, error) {
 	const perPage = 100
 
