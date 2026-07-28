@@ -15,6 +15,36 @@ type CachedRepo struct {
 	CommitHash string
 }
 
+func IndexedRepoNames() (map[string]bool, error) {
+	orgs, err := os.ReadDir(paths.IndexDir())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	out := make(map[string]bool)
+	for _, orgEntry := range orgs {
+		if !orgEntry.IsDir() {
+			continue
+		}
+		org := orgEntry.Name()
+
+		entries, err := os.ReadDir(filepath.Join(paths.IndexDir(), org))
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".gob") {
+				continue
+			}
+			out[org+"/"+strings.TrimSuffix(entry.Name(), ".gob")] = true
+		}
+	}
+	return out, nil
+}
+
 func ListCachedRepos() ([]CachedRepo, error) {
 	indexDir := paths.IndexDir()
 

@@ -25,11 +25,22 @@ type Config struct {
 }
 
 type Server struct {
-	cfg Config
-	gh  *ghapi.Client
+	cfg   Config
+	gh    *ghapi.Client
+	cache *cache
 
 	viewerOnce sync.Once
 	viewer     string
+}
+
+const (
+	inboxTTL    = 30 * time.Second
+	prTTL       = 45 * time.Second
+	loadTimeout = 25 * time.Second
+)
+
+func detached() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), loadTimeout)
 }
 
 func (s *Server) viewerLogin(ctx context.Context) string {
@@ -51,7 +62,7 @@ func NewServer(cfg Config) (*Server, error) {
 	if cfg.Addr == "" {
 		cfg.Addr = ":8080"
 	}
-	return &Server{cfg: cfg, gh: ghapi.New(cfg.Token)}, nil
+	return &Server{cfg: cfg, gh: ghapi.New(cfg.Token), cache: newCache()}, nil
 }
 
 func (s *Server) Handler() http.Handler {
@@ -106,8 +117,6 @@ type inboxItem struct {
 }
 
 func (s *Server) handleInbox(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-
 	owner := r.URL.Query().Get("owner")
 	repo := r.URL.Query().Get("repo")
 	org := r.URL.Query().Get("org")
@@ -115,23 +124,43 @@ func (s *Server) handleInbox(w http.ResponseWriter, r *http.Request) {
 		org = s.cfg.Org
 	}
 
+	var key string
+	switch {
+	case owner != "" && repo != "":
+		key = "inbox:repo:" + owner + "/" + repo
+	case org != "":
+		key = "inbox:org:" + org
+	default:
+		writeError(w, http.StatusBadRequest, "provide ?org= or ?owner=&repo=")
+		return
+	}
+
+	payload, err := s.cache.load(key, inboxTTL, func() (any, error) {
+		ctx, cancel := detached()
+		defer cancel()
+		return s.buildInbox(ctx, org, owner, repo)
+	})
+	if err != nil {
+		writeUpstreamError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, payload)
+}
+
+func (s *Server) buildInbox(ctx context.Context, org, owner, repo string) (any, error) {
 	var (
 		issues []ghapi.SearchIssue
 		err    error
 	)
 
-	switch {
-	case owner != "" && repo != "":
+	if owner != "" && repo != "" {
 		issues, err = s.gh.RepoPullRequests(ctx, owner, repo)
-	case org != "":
+	} else {
 		issues, err = s.gh.OrgPullRequests(ctx, org)
-	default:
-		writeError(w, http.StatusBadRequest, "provide ?org= or ?owner=&repo=")
-		return
 	}
 	if err != nil {
-		writeUpstreamError(w, err)
-		return
+		return nil, err
 	}
 
 	indexed := indexedRepos()
@@ -158,24 +187,19 @@ func (s *Server) handleInbox(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	return map[string]any{
 		"items":  items,
 		"viewer": s.viewerLogin(ctx),
 		"rate":   s.gh.Rate(),
-	})
+	}, nil
 }
 
 func indexedRepos() map[string]bool {
-	cached, err := github.ListCachedRepos()
+	names, err := github.IndexedRepoNames()
 	if err != nil {
 		return nil
 	}
-
-	out := make(map[string]bool, len(cached))
-	for _, c := range cached {
-		out[c.Repo.Org+"/"+c.Repo.Name] = true
-	}
-	return out
+	return names
 }
 
 type prLine struct {
@@ -219,8 +243,6 @@ type prComment struct {
 }
 
 func (s *Server) handlePullRequest(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-
 	owner := r.PathValue("owner")
 	repo := r.PathValue("repo")
 	number, err := strconv.Atoi(r.PathValue("number"))
@@ -229,22 +251,48 @@ func (s *Server) handlePullRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pr, err := s.gh.PullRequest(ctx, owner, repo, number)
+	key := fmt.Sprintf("pr:%s/%s/%d", owner, repo, number)
+	payload, err := s.cache.load(key, prTTL, func() (any, error) {
+		ctx, cancel := detached()
+		defer cancel()
+		return s.buildPullRequest(ctx, owner, repo, number)
+	})
 	if err != nil {
 		writeUpstreamError(w, err)
 		return
 	}
 
-	files, err := s.gh.PullRequestFiles(ctx, owner, repo, number)
-	if err != nil {
-		writeUpstreamError(w, err)
-		return
-	}
+	writeJSON(w, http.StatusOK, payload)
+}
 
-	comments, err := s.gh.ReviewComments(ctx, owner, repo, number)
-	if err != nil {
-		writeUpstreamError(w, err)
-		return
+func (s *Server) buildPullRequest(ctx context.Context, owner, repo string, number int) (any, error) {
+	var (
+		pr          *ghapi.PullRequest
+		files       []ghapi.File
+		comments    []ghapi.ReviewComment
+		errPR       error
+		errFiles    error
+		errComments error
+		wg          sync.WaitGroup
+	)
+
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		pr, errPR = s.gh.PullRequest(ctx, owner, repo, number)
+	}()
+	go func() {
+		defer wg.Done()
+		files, errFiles = s.gh.PullRequestFiles(ctx, owner, repo, number)
+	}()
+	go func() {
+		defer wg.Done()
+		comments, errComments = s.gh.ReviewComments(ctx, owner, repo, number)
+	}()
+	wg.Wait()
+
+	if err := errors.Join(errPR, errFiles, errComments); err != nil {
+		return nil, err
 	}
 
 	outFiles := make([]prFile, 0, len(files))
@@ -281,7 +329,7 @@ func (s *Server) handlePullRequest(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	return map[string]any{
 		"owner":        owner,
 		"repo":         repo,
 		"number":       pr.Number,
@@ -301,7 +349,7 @@ func (s *Server) handlePullRequest(w http.ResponseWriter, r *http.Request) {
 		"files":        outFiles,
 		"comments":     outComments,
 		"rate":         s.gh.Rate(),
-	})
+	}, nil
 }
 
 func toHunks(hunks []diff.Hunk) []prHunk {
